@@ -1,0 +1,2432 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DPHE Water Sample Prediction System</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<script>
+  // Set this to your deployed Apps Script Web App URL, e.g.
+  // https://script.google.com/macros/s/XXXXXXXXXXXXXXXXXXXX/exec
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzejly43ZBwwcQs7jdMil5EfGhD0FwMmNmbjgHf8-zHdf7Q-QeEnQdwHH2jp842V0c7jQ/exec';
+</script>
+
+<header class="topbar">
+  <div>
+    <h1>DPHE Water Sample Prediction System</h1>
+    <div class="sub">Fiscal Year Sample &amp; Chemical Requirement Planning</div>
+  </div>
+  <div class="userbox">
+    <div>
+      <div id="userNameDisplay" style="font-weight:600">-</div>
+      <div class="role-badge" id="roleBadgeDisplay">-</div>
+    </div>
+    <button type="button" class="btn-sm btn-logout" onclick="openChangePasswordModal()">🔑 পাসওয়ার্ড পরিবর্তন</button>
+    <button type="button" class="btn-sm btn-logout" onclick="handleLogout()">🚪 লগআউট</button>
+  </div>
+</header>
+
+<div class="container" id="app">
+  <div id="exenView" style="display:none"></div>
+  <div id="chemistView" style="display:none"></div>
+  <div id="adminView" style="display:none"></div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal-backdrop" id="changePasswordModal">
+  <div class="modal-box">
+    <h3 style="margin-top:0;color:var(--primary-dark)">🔑 পাসওয়ার্ড পরিবর্তন করুন</h3>
+    <div id="pwdModalAlert"></div>
+    <form onsubmit="handleChangePasswordSubmit(event)">
+      <label>বর্তমান পাসওয়ার্ড</label>
+      <input type="password" id="oldPasswordInput" required placeholder="••••••••">
+      <label>নতুন পাসওয়ার্ড (কমপক্ষে ৪ অক্ষর)</label>
+      <input type="password" id="newPasswordInput" required minlength="4" placeholder="••••••••">
+      <label>নতুন পাসওয়ার্ড পুনরায় লিখুন</label>
+      <input type="password" id="confirmPasswordInput" required minlength="4" placeholder="••••••••">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+        <button type="button" class="btn-cancel" onclick="closeChangePasswordModal()">বাতিল</button>
+        <button type="submit" id="savePwdBtn" class="btn-save">সংরক্ষণ করুন</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<footer>DPHE Water Sample Prediction System — Department of Public Health Engineering (DPHE)</footer>
+
+<script>
+// Authentication & Session Context — read from sessionStorage,
+// which Login (index.html) populated after a successful login.
+// If nothing is there, bounce back to the login page immediately.
+var SESSION_TOKEN = sessionStorage.getItem('dphe_auth_token');
+var CURRENT_USER = null;
+try {
+  CURRENT_USER = JSON.parse(sessionStorage.getItem('dphe_user'));
+} catch (e) {
+  CURRENT_USER = null;
+}
+if (!SESSION_TOKEN || !CURRENT_USER) {
+  window.location.href = 'index.html';
+}
+
+// Global DB cache for UI tab navigation
+var DB = {
+  zones: [], districts: [], users: [], parameters: [], chemicals: [],
+  parameterChemicals: [], fiscalYears: [], projects: [], sampleEntries: [],
+  privateSampleEntries: []
+};
+
+// Low-level RPC helper — calls the Apps Script Web App with a
+// { fn, args } JSON body over POST. "text/plain" content type is
+// used deliberately so the browser skips the CORS preflight
+// (Apps Script Web Apps can't respond to custom OPTIONS requests).
+function apiCall(fnName, args) {
+  if (!API_URL || API_URL.indexOf('[') === 0) {
+    return Promise.reject(new Error('API_URL কনফিগার করা হয়নি। app.html ফাইলের উপরে সেট করুন।'));
+  }
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ fn: fnName, args: args || [] })
+  })
+    .then(function(res) {
+      if (!res.ok) throw new Error('Network error: ' + res.status + ' ' + res.statusText);
+      return res.json();
+    })
+    .then(function(json) {
+      if (!json.success) throw new Error(json.error || 'Unknown API error.');
+      return json.data;
+    });
+}
+
+// Drop-in replacement for the old google.script.run-based gsr():
+// same call signature (gsr('fnName', arg1, arg2, ...)) so none of
+// the 40+ call sites elsewhere in this file need to change.
+function gsr(fnName, ...args) {
+  return apiCall(fnName, [SESSION_TOKEN, ...args]).catch(function(err) {
+    var msg = err && err.message ? err.message : String(err);
+    if (msg.includes('মেয়াদ শেষ') || msg.includes('Session expired') || msg.includes('লগইন করুন')) {
+      alert('আপনার সেশনের মেয়াদ শেষ হয়েছে। পুনরায় লগইন করুন।');
+      handleLogout();
+    }
+    throw err;
+  });
+}
+
+function handleLogout() {
+  var token = SESSION_TOKEN;
+  sessionStorage.removeItem('dphe_auth_token');
+  sessionStorage.removeItem('dphe_user');
+  apiCall('doLogout', [token])
+    .catch(function() { /* ignore — redirect regardless */ })
+    .then(function() { window.location.href = 'index.html'; });
+}
+
+function openChangePasswordModal() {
+  document.getElementById('pwdModalAlert').innerHTML = '';
+  document.getElementById('oldPasswordInput').value = '';
+  document.getElementById('newPasswordInput').value = '';
+  document.getElementById('confirmPasswordInput').value = '';
+  document.getElementById('changePasswordModal').classList.add('show');
+}
+
+function closeChangePasswordModal() {
+  document.getElementById('changePasswordModal').classList.remove('show');
+}
+
+function handleChangePasswordSubmit(e) {
+  e.preventDefault();
+  var oldPass = document.getElementById('oldPasswordInput').value;
+  var newPass = document.getElementById('newPasswordInput').value;
+  var confirmPass = document.getElementById('confirmPasswordInput').value;
+  var alertBox = document.getElementById('pwdModalAlert');
+  var btn = document.getElementById('savePwdBtn');
+
+  if (newPass !== confirmPass) {
+    alertBox.innerHTML = '<div class="msg error">নতুন পাসওয়ার্ড দুটি মিলছে না।</div>';
+    return;
+  }
+
+  btn.disabled = true;
+  alertBox.innerHTML = '<div class="msg info">সংরক্ষণ করা হচ্ছে...</div>';
+
+  gsr('changeUserPassword', oldPass, newPass)
+    .then(function(res) {
+      btn.disabled = false;
+      alertBox.innerHTML = '<div class="msg success">' + esc(res.message || 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে!') + '</div>';
+      setTimeout(closeChangePasswordModal, 1500);
+    })
+    .catch(function(err) {
+      btn.disabled = false;
+      alertBox.innerHTML = '<div class="msg error">' + esc(err.message || 'ত্রুটি হয়েছে') + '</div>';
+    });
+}
+
+function promptResetUserPassword(email) {
+  var newPass = prompt('Enter new password for ' + email + ' (Leave blank for default: dphe2025):', 'dphe2025');
+  if (newPass === null) return;
+  newPass = newPass.trim() || 'dphe2025';
+  gsr('adminResetUserPassword', email, newPass)
+    .then(function(res) {
+      alert('✓ ' + (res.message || 'Password reset successfully!'));
+    })
+    .catch(function(err) {
+      alert('Error: ' + err.message);
+    });
+}
+
+/* ============ SHARED HELPERS ============ */
+function esc(s) {
+  return (s === undefined || s === null) ? '' : String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+function showMsg(containerEl, text, type) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + type;
+  div.textContent = text;
+  containerEl.prepend(div);
+  setTimeout(() => div.remove(), 4000);
+}
+function paramCheckboxList(parameters, name) {
+  return `<div class="param-list">` + parameters.map(p =>
+    `<label><input type="checkbox" value="${esc(p.ParameterID)}" data-group="${name}"> ${esc(p.ParameterName)} <span style="color:#9ca3af">(${esc(p.Unit)})</span></label>`
+  ).join('') + `</div>`;
+}
+function getCheckedParamIds(formEl, name) {
+  return Array.from(formEl.querySelectorAll(`input[data-group="${name}"]:checked`)).map(el => el.value);
+}
+function paramNamesFromIds(ids, parameters) {
+  const map = {}; parameters.forEach(p => map[p.ParameterID] = p.ParameterName);
+  return ids.map(id => map[id] || id).join(', ');
+}
+function fyOptions(fiscalYears, selectedId) {
+  return fiscalYears.map(fy =>
+    `<option value="${esc(fy.FYID)}" ${fy.FYID === selectedId ? 'selected' : ''}>${esc(fy.FYLabel)}${fy.IsActive ? ' (Active)' : ''}</option>`
+  ).join('');
+}
+function confirmDelete(name) {
+  return confirm(`"${name}" মুছে ফেলতে চান? এই কাজ undo করা যাবে না।`);
+}
+
+/* =====================================================================
+   EXEN VIEW
+   ===================================================================== */
+let EXEN_STATE = { fyId: null, districtId: null, districtName: '', parameters: [], projects: [] };
+
+async function renderExenView() {
+  const el = document.getElementById('exenView');
+  el.innerHTML = `<div class="loading">Loading...</div>`;
+
+  const [fiscalYears, districts, parameters] = await Promise.all([
+    gsr('getFiscalYears'), gsr('getDistricts'), gsr('getParameters')
+  ]);
+
+  const myDistrict = districts.find(d => d.DistrictID === CURRENT_USER.districtId);
+  EXEN_STATE.districtId = CURRENT_USER.districtId;
+  EXEN_STATE.districtName = myDistrict ? myDistrict.DistrictName : CURRENT_USER.districtId;
+  EXEN_STATE.parameters = parameters;
+
+  const activeFY = fiscalYears.find(f => f.IsActive) || fiscalYears[0];
+  EXEN_STATE.fyId = activeFY ? activeFY.FYID : null;
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>District: ${esc(EXEN_STATE.districtName)}</h2>
+      <div class="row">
+        <div class="col"><label>Fiscal Year</label><select id="exenFY">${fyOptions(fiscalYears, EXEN_STATE.fyId)}</select></div>
+      </div>
+    </div>
+    <div class="card" id="exenSummaryCard"><div class="loading">Loading summary...</div></div>
+    <div class="card">
+      <h2>Add Sample Requirement (Project-wise)</h2>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:10px">📋 Projects are created by the Admin. Select the project assigned to your district below.</p>
+      <div class="row">
+        <div class="col"><label>Select Project</label><select id="exenProjectSelect"><option value="">-- Select project --</option></select></div>
+      </div>
+      <h3>Parameters to test per sample</h3>
+      ${paramCheckboxList(parameters, 'exen')}
+      <div class="row">
+        <div class="col"><label>Expected Number of Samples (this fiscal year)</label><input type="number" id="exenExpectedSamples" min="0" placeholder="e.g. 250"></div>
+      </div>
+      <label>Remarks (optional)</label><textarea id="exenRemarks"></textarea>
+      <button type="button" id="exenSubmitBtn">Save Requirement</button>
+    </div>
+    <div class="card"><h2>Submitted Entries</h2><div id="exenEntriesTable"><div class="loading">Loading...</div></div></div>
+  `;
+
+  document.getElementById('exenFY').addEventListener('change', e => { EXEN_STATE.fyId = e.target.value; loadExenProjects(); refreshExenDashboard(); });
+  document.getElementById('exenSubmitBtn').addEventListener('click', exenSubmitEntry);
+
+  await loadExenProjects();
+  await refreshExenDashboard();
+}
+
+async function loadExenProjects() {
+  const projects = await gsr('getProjects', EXEN_STATE.districtId, EXEN_STATE.fyId);
+  EXEN_STATE.projects = projects;
+  const sel = document.getElementById('exenProjectSelect');
+  if (!sel) return;
+  sel.innerHTML = `<option value="">-- Select project --</option>` + projects.map(p => `<option value="${esc(p.ProjectID)}">${esc(p.ProjectName)}</option>`).join('');
+}
+
+async function exenSubmitEntry() {
+  const projectId = document.getElementById('exenProjectSelect').value;
+  const expectedSamples = document.getElementById('exenExpectedSamples').value;
+  const remarks = document.getElementById('exenRemarks').value;
+  const paramIds = getCheckedParamIds(document, 'exen');
+
+  if (!projectId) { alert('Admin কর্তৃক assign করা কোনো project select করুন।'); return; }
+  if (!expectedSamples || Number(expectedSamples) <= 0) { alert('Enter expected number of samples.'); return; }
+  if (paramIds.length === 0) { alert('Select at least one parameter.'); return; }
+
+  const btn = document.getElementById('exenSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    await gsr('saveSampleEntry', { fyId: EXEN_STATE.fyId, districtId: EXEN_STATE.districtId, projectId, expectedSamples, parameterIds: paramIds, remarks });
+    document.getElementById('exenExpectedSamples').value = '';
+    document.getElementById('exenRemarks').value = '';
+    document.querySelectorAll('input[data-group="exen"]').forEach(cb => cb.checked = false);
+    await refreshExenDashboard();
+    showMsg(document.getElementById('exenView'), 'Saved successfully.', 'success');
+  } catch (err) {
+    showMsg(document.getElementById('exenView'), 'Error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save Requirement';
+  }
+}
+
+let EXEN_CURRENT_ENTRIES = [];
+
+async function refreshExenDashboard() {
+  const data = await gsr('getDistrictDashboard', EXEN_STATE.districtId, EXEN_STATE.fyId);
+  EXEN_CURRENT_ENTRIES = data.entries || [];
+  const card = document.getElementById('exenSummaryCard');
+  if (!card) return;
+
+  const sentBackCount = data.entries.filter(e => e.status === 'SENT_BACK').length;
+  card.innerHTML = `
+    <h2>Fiscal Year Summary</h2>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="num">${data.totalSamples}</div><div class="lbl">Active Expected Samples (In Calculation)</div></div>
+      <div class="stat-box"><div class="num">${data.entries.filter(e => e.status !== 'SENT_BACK').length}</div><div class="lbl">Active Submissions</div></div>
+      ${sentBackCount > 0 ? `<div class="stat-box" style="background:#fff1f2;border:1px solid #fecdd3"><div class="num" style="color:#e11d48">${sentBackCount}</div><div class="lbl" style="color:#be123c;font-weight:600">⚠️ Needs Revision (Sent Back by Admin)</div></div>` : ''}
+    </div>
+  `;
+  const tableEl = document.getElementById('exenEntriesTable');
+  if (!tableEl) return;
+  tableEl.innerHTML = data.entries.length === 0 ? `<div class="empty-state">No entries yet.</div>` : `
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Expected Samples</th>
+          <th>Parameters</th>
+          <th>Status</th>
+          <th>Remarks</th>
+          <th>Date</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${data.entries.map(e => {
+          const isSentBack = e.status === 'SENT_BACK';
+          return `
+          <tr id="exen-entry-${esc(e.entryId)}" style="${isSentBack ? 'background:#fff1f2' : ''}">
+            <td><strong>${esc(e.projectName)}</strong></td>
+            <td style="font-weight:700;font-size:14px;color:${isSentBack ? '#e11d48' : '#0d6efd'}">${esc(e.expectedSamples)}</td>
+            <td style="font-size:12px">${esc(paramNamesFromIds(e.parameterIds, EXEN_STATE.parameters))}</td>
+            <td>
+              ${isSentBack ? `
+                <span class="badge" style="background:#fee2e2;color:#991b1b;font-weight:700;padding:3px 8px">⚠️ Sent Back for Revision</span>
+                <div style="font-size:11px;color:#dc2626;margin-top:3px"><strong>Admin Note:</strong> ${esc(e.sendBackReason || 'Revision needed')}</div>
+                <div style="font-size:10px;color:#64748b;font-style:italic">Excluded from chemical calculation</div>
+              ` : `
+                <span class="badge" style="background:#dcfce7;color:#166534;font-weight:600;padding:3px 8px">🔒 Submitted (Locked)</span>
+              `}
+            </td>
+            <td style="font-size:12px;color:#64748b">${esc(e.remarks || '-')}</td>
+            <td style="font-size:12px;color:#64748b">${esc(e.enteredAt)}</td>
+            <td style="text-align:right">
+              ${isSentBack ? `
+                <div class="td-actions" style="justify-content:flex-end">
+                  <button type="button" class="btn-sm btn-edit" style="background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;font-weight:600" onclick="editExenEntry('${esc(e.entryId)}')">✏️ Edit & Resubmit</button>
+                  <button type="button" class="btn-sm btn-delete" onclick="deleteExenEntry('${esc(e.entryId)}')">🗑️ Discard</button>
+                </div>
+              ` : `
+                <span style="font-size:11px;color:#94a3b8;font-style:italic">🔒 Locked (Admin send-back needed)</span>
+              `}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+function editExenEntry(entryId) {
+  const row = document.getElementById('exen-entry-' + entryId);
+  const entry = EXEN_CURRENT_ENTRIES.find(e => e.entryId === entryId);
+  if (!row || !entry) return;
+
+  const currentParamIds = entry.parameterIds || [];
+  const projOptions = EXEN_STATE.projects.map(p => 
+    `<option value="${esc(p.ProjectID)}" ${p.ProjectID === entry.projectId ? 'selected' : ''}>${esc(p.ProjectName)}</option>`
+  ).join('');
+
+  row.classList.add('editing');
+  row.innerHTML = `
+    <td colspan="7" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
+      <div style="font-weight:700;color:#92400e;margin-bottom:8px;font-size:14px">✏️ Edit & Resubmit Requirement (Admin Note: ${esc(entry.sendBackReason || 'Revision needed')})</div>
+      <div class="row">
+        <div class="col"><label>Project</label><select id="eee-proj-${esc(entryId)}">${projOptions}</select></div>
+        <div class="col"><label>Expected Samples</label><input type="number" id="eee-samples-${esc(entryId)}" value="${esc(entry.expectedSamples)}" min="1"></div>
+      </div>
+      <label style="margin-top:6px;font-weight:600">Parameters to test:</label>
+      <div class="param-list" style="max-height:140px;overflow-y:auto;background:#fff;margin-bottom:10px">
+        ${EXEN_STATE.parameters.map(p => `
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-right:12px">
+            <input type="checkbox" value="${esc(p.ParameterID)}" class="eee-param-cb-${esc(entryId)}" ${currentParamIds.includes(p.ParameterID) ? 'checked' : ''} style="margin:0;width:auto">
+            ${esc(p.ParameterName)}
+          </label>
+        `).join('')}
+      </div>
+      <div class="row">
+        <div class="col"><label>Remarks</label><input type="text" id="eee-remarks-${esc(entryId)}" value="${esc(entry.remarks || '')}"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn-sm btn-save" onclick="saveExenEntry('${esc(entryId)}')">🚀 Save & Resubmit</button>
+        <button type="button" class="btn-sm btn-cancel" onclick="refreshExenDashboard()">Cancel</button>
+      </div>
+    </td>`;
+}
+
+async function saveExenEntry(entryId) {
+  const projectId = document.getElementById('eee-proj-' + entryId).value;
+  const expectedSamples = document.getElementById('eee-samples-' + entryId).value;
+  const remarks = document.getElementById('eee-remarks-' + entryId).value;
+  const paramIds = Array.from(document.querySelectorAll(`.eee-param-cb-${entryId}:checked`)).map(cb => cb.value);
+
+  if (!projectId) { alert('Project select করুন।'); return; }
+  if (!expectedSamples || Number(expectedSamples) <= 0) { alert('Valid expected samples দিন।'); return; }
+  if (paramIds.length === 0) { alert('কমপক্ষে একটি parameter select করুন।'); return; }
+
+  try {
+    await gsr('updateSampleEntry', entryId, { projectId, expectedSamples, parameterIds: paramIds, remarks });
+    await refreshExenDashboard();
+    showMsg(document.getElementById('exenView'), 'Entry re-submitted successfully. It is now locked and re-included in chemical calculations.', 'success');
+  } catch(err) {
+    alert(err.message);
+  }
+}
+
+async function deleteExenEntry(entryId) {
+  if (!confirm('আপনি কি নিশ্চিত যে এই ফেরত আসা (Sent Back) এন্ট্রিটি বাতিল / মুছে ফেলতে চান?')) return;
+  try {
+    await gsr('deleteSampleEntry', entryId);
+    await refreshExenDashboard();
+    showMsg(document.getElementById('exenView'), 'Entry discarded successfully.', 'success');
+  } catch(err) {
+    alert(err.message);
+  }
+}
+
+/* =====================================================================
+   CHEMIST VIEW
+   ===================================================================== */
+let CHEMIST_STATE = { fyId: null, zoneId: null, zoneName: '', parameters: [] };
+let CHEMIST_CURRENT_ENTRIES = [];
+
+async function renderChemistView() {
+  const el = document.getElementById('chemistView');
+  el.innerHTML = `<div class="loading">Loading...</div>`;
+
+  const [fiscalYears, zones, parameters] = await Promise.all([gsr('getFiscalYears'), gsr('getZones'), gsr('getParameters')]);
+  const myZone = zones.find(z => z.ZoneID === CURRENT_USER.zoneId) || zones[0];
+  CHEMIST_STATE.zoneId = (myZone ? myZone.ZoneID : CURRENT_USER.zoneId) || (zones[0] ? zones[0].ZoneID : 'Z1');
+  CHEMIST_STATE.zoneName = myZone ? myZone.ZoneName : 'Zonal Laboratory';
+  CHEMIST_STATE.parameters = parameters;
+  const activeFY = fiscalYears.find(f => f.IsActive) || fiscalYears[0];
+  CHEMIST_STATE.fyId = activeFY ? activeFY.FYID : null;
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>Zone: ${esc(CHEMIST_STATE.zoneName)}</h2>
+      <div class="row"><div class="col"><label>Fiscal Year</label><select id="chemFY">${fyOptions(fiscalYears, CHEMIST_STATE.fyId)}</select></div></div>
+    </div>
+    <div class="tabs">
+      <button type="button" class="tab-btn active" data-tab="summary">Zone Summary</button>
+      <button type="button" class="tab-btn" data-tab="private">Private Sample Entry</button>
+    </div>
+    <div class="tab-panel active" id="tab-summary"><div class="card" id="chemSummaryCard"><div class="loading">Loading...</div></div></div>
+    <div class="tab-panel" id="tab-private">
+      <div class="card">
+        <h2>Add Private Sample</h2>
+        <div class="row">
+          <div class="col"><label>Client Type</label>
+            <select id="privClientType">
+              <option value="OTHER_GOVT">Other Government Institution</option>
+              <option value="PRIVATE_ORG">Private Organization</option>
+              <option value="WALK_IN">Walk-in Client</option>
+            </select>
+          </div>
+          <div class="col"><label>Client Name</label><input type="text" id="privClientName" placeholder="Name of institution / client"></div>
+        </div>
+        <h3>Parameters to test per sample</h3>
+        ${paramCheckboxList(parameters, 'priv')}
+        <div class="row"><div class="col"><label>Expected Number of Samples</label><input type="number" id="privExpectedSamples" min="0"></div></div>
+        <label>Remarks (optional)</label><textarea id="privRemarks"></textarea>
+        <button type="button" id="privSubmitBtn">Save Private Sample</button>
+      </div>
+      <div class="card"><h2>Private Sample Entries</h2><div id="privEntriesTable"><div class="loading">Loading...</div></div></div>
+    </div>
+  `;
+
+  document.getElementById('chemFY').addEventListener('change', e => { CHEMIST_STATE.fyId = e.target.value; refreshChemistDashboard(); });
+  document.getElementById('privSubmitBtn').addEventListener('click', privSubmitEntry);
+
+  el.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      el.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  await refreshChemistDashboard();
+}
+
+function clientBadge(type) {
+  const map = { OTHER_GOVT: ['other-govt', 'Other Govt.'], PRIVATE_ORG: ['private-org', 'Private Org.'], WALK_IN: ['walk-in', 'Walk-in'] };
+  const v = map[type] || ['govt', type];
+  return `<span class="badge ${v[0]}">${v[1]}</span>`;
+}
+
+async function refreshChemistDashboard() {
+  const data = await gsr('getZoneDashboard', CHEMIST_STATE.zoneId, CHEMIST_STATE.fyId);
+  const card = document.getElementById('chemSummaryCard');
+  if (!card) return;
+  CHEMIST_CURRENT_ENTRIES = data.privateEntries || [];
+  const chemPredictionRows = (data.chemicalPrediction || []).map(p =>
+    `<tr><td>${esc(p.chemicalName)}</td><td style="font-weight:600">${Number(p.totalQty).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${esc(p.unit)}</td></tr>`
+  ).join('');
+  const fyLabel = document.getElementById('chemFY') ? document.getElementById('chemFY').options[document.getElementById('chemFY').selectedIndex].text : '';
+  card.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">Zone-wide Fiscal Year Summary</h2>
+      <button type="button" class="secondary btn-sm" style="padding:8px 16px;font-size:13px" onclick="printChemicalReport()">🖨️ Chemical Report Print</button>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="num">${data.grandTotalSamples}</div><div class="lbl">Total Samples (Govt + Private)</div></div>
+      <div class="stat-box"><div class="num">${data.totalGovtSamples}</div><div class="lbl">Government / District Samples</div></div>
+      <div class="stat-box"><div class="num">${data.totalPrivateSamples}</div><div class="lbl">Private Samples</div></div>
+    </div>
+    <h3>District-wise Breakdown</h3>
+    <table><thead><tr><th>District</th><th>Expected Samples</th><th>Entries</th></tr></thead>
+    <tbody>${data.districtBreakdown.map(d => `<tr><td>${esc(d.districtName)}</td><td>${d.totalSamples}</td><td>${d.entryCount}</td></tr>`).join('')}</tbody></table>
+    <h3>Private Sample Breakdown</h3>
+    <table><thead><tr><th>Client Type</th><th>Expected Samples</th><th>Entries</th></tr></thead>
+    <tbody>${data.privateBreakdownByType.map(p => `<tr><td>${clientBadge(p.clientType)}</td><td>${p.totalSamples}</td><td>${p.entryCount}</td></tr>`).join('')}</tbody></table>
+    <h3 style="margin-top:20px">🧪 Predicted Chemical Requirement (Zone-wide)</h3>
+    ${data.chemicalPrediction && data.chemicalPrediction.length > 0 ? `
+    <table id="chemPredTable">
+      <thead><tr><th>Chemical</th><th>Total Qty Needed</th><th>Unit</th></tr></thead>
+      <tbody>${chemPredictionRows}</tbody>
+    </table>` : '<div class="empty-state">No sample entries yet — chemical prediction will appear here once EXEN data is submitted.</div>'}
+  `;
+  // Store for print
+  window._CHEM_REPORT_DATA = { zone: CHEMIST_STATE.zoneName, fy: fyLabel, prediction: data.chemicalPrediction, grandTotal: data.grandTotalSamples, distBreakdown: data.districtBreakdown };
+
+  // Update private entries table
+  const tableEl = document.getElementById('privEntriesTable');
+  if (tableEl) {
+    if (!data.privateEntries || data.privateEntries.length === 0) {
+      tableEl.innerHTML = `<div class="empty-state">No private sample entries yet.</div>`;
+    } else {
+      tableEl.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Client Name</th>
+              <th>Samples</th>
+              <th>Parameters</th>
+              <th>Status</th>
+              <th>Remarks</th>
+              <th>Date</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.privateEntries.map(e => {
+              const isSentBack = e.status === 'SENT_BACK';
+              return `
+                <tr id="priv-entry-${esc(e.entryId)}">
+                  <td>${clientBadge(e.clientType)}</td>
+                  <td><strong>${esc(e.clientName)}</strong></td>
+                  <td style="font-weight:700;color:#0d6efd;font-size:14px">${esc(e.expectedSamples)}</td>
+                  <td style="font-size:12px;max-width:240px">${esc(paramNamesFromIds(e.parameterIds, CHEMIST_STATE.parameters))}</td>
+                  <td>
+                    ${isSentBack ? `
+                      <span class="badge" style="background:#fee2e2;color:#991b1b;font-weight:600;padding:3px 8px" title="${esc(e.sendBackReason || '')}">⚠️ Sent Back</span>
+                      <div style="font-size:11px;color:#dc2626;margin-top:3px"><strong>Admin Note:</strong> ${esc(e.sendBackReason || 'Revision needed')}</div>
+                      <div style="font-size:10px;color:#64748b;font-style:italic">Excluded from chemical calculation</div>
+                    ` : `
+                      <span class="badge" style="background:#dcfce7;color:#166534;font-weight:600;padding:3px 8px">🔒 Submitted (Locked)</span>
+                    `}
+                  </td>
+                  <td style="font-size:12px;color:#64748b">${esc(e.remarks || '-')}</td>
+                  <td style="font-size:12px;color:#64748b">${esc(e.enteredAt)}</td>
+                  <td style="text-align:right">
+                    ${isSentBack ? `
+                      <div class="td-actions" style="justify-content:flex-end">
+                        <button type="button" class="btn-sm btn-edit" style="background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;font-weight:600" onclick="editPrivateEntry('${esc(e.entryId)}')">✏️ Edit & Resubmit</button>
+                        <button type="button" class="btn-sm btn-delete" onclick="deletePrivateEntry('${esc(e.entryId)}')">🗑️ Discard</button>
+                      </div>
+                    ` : `
+                      <span style="font-size:11px;color:#94a3b8;font-style:italic">🔒 Locked (Admin send-back needed)</span>
+                    `}
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  }
+}
+
+function printChemicalReport() {
+  const d = window._CHEM_REPORT_DATA || {};
+  const rows = (d.prediction || []).map(p =>
+    `<tr><td>${p.chemicalName}</td><td style="text-align:right">${Number(p.totalQty).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${p.unit}</td></tr>`
+  ).join('');
+  const distRows = (d.distBreakdown || []).map(x =>
+    `<tr><td>${x.districtName}</td><td style="text-align:right">${x.totalSamples}</td></tr>`
+  ).join('');
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Chemical Requirement Report</title>
+    <style>
+      body{font-family:'Segoe UI',Arial,sans-serif;padding:30px;color:#111}
+      h1{font-size:20px;margin-bottom:4px}h2{font-size:15px;color:#0a4fbe;margin:20px 0 8px}
+      .meta{font-size:13px;color:#666;margin-bottom:20px}
+      table{border-collapse:collapse;width:100%;margin-bottom:16px;font-size:13px}
+      th,td{border:1px solid #ccc;padding:7px 10px;text-align:left}
+      th{background:#f1f5f9;font-weight:600}
+      .total{font-weight:700;font-size:15px;margin-bottom:8px}
+      .footer{margin-top:30px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:10px}
+      @media print{button{display:none}}
+    <\/style>
+  <\/head><body>
+    <h1>DPHE — Zonal Chemical Requirement Report</h1>
+    <div class="meta">Zone: <strong>${d.zone || '-'}</strong> &nbsp;|&nbsp; Fiscal Year: <strong>${d.fy || '-'}</strong> &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</div>
+    <div class="total">Total Expected Samples: ${d.grandTotal || 0}</div>
+    <h2>District-wise Sample Breakdown</h2>
+    <table><thead><tr><th>District</th><th>Expected Samples</th></tr></thead><tbody>${distRows || '<tr><td colspan="2">No data</td></tr>'}<\/tbody><\/table>
+    <h2>Predicted Chemical Requirement</h2>
+    <table><thead><tr><th>Chemical Name</th><th style="text-align:right">Total Quantity</th><th>Unit</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="3">No data</td></tr>'}<\/tbody><\/table>
+    <div class="footer">DPHE Water Sample Prediction System — This is a system-generated report.</div>
+    <br><button onclick="window.print()">🖨️ Print</button>
+  <\/body><\/html>`;
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
+function editPrivateEntry(entryId) {
+  const row = document.getElementById('priv-entry-' + entryId);
+  const entry = CHEMIST_CURRENT_ENTRIES.find(e => e.entryId === entryId);
+  if (!row || !entry) return;
+
+  const currentParamIds = entry.parameterIds || [];
+
+  row.classList.add('editing');
+  row.innerHTML = `
+    <td colspan="8" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
+      <div style="font-weight:700;color:#92400e;margin-bottom:8px;font-size:14px">✏️ Edit & Resubmit Private Sample (Admin Note: ${esc(entry.sendBackReason || 'Revision needed')})</div>
+      <div class="row">
+        <div class="col"><label>Client Type</label>
+          <select id="epe-type-${esc(entryId)}">
+            <option value="OTHER_GOVT" ${entry.clientType==='OTHER_GOVT'?'selected':''}>Other Government Institution</option>
+            <option value="PRIVATE_ORG" ${entry.clientType==='PRIVATE_ORG'?'selected':''}>Private Organization</option>
+            <option value="WALK_IN" ${entry.clientType==='WALK_IN'?'selected':''}>Walk-in Client</option>
+          </select>
+        </div>
+        <div class="col"><label>Client Name</label><input type="text" id="epe-name-${esc(entryId)}" value="${esc(entry.clientName)}"></div>
+        <div class="col"><label>Expected Samples</label><input type="number" id="epe-samples-${esc(entryId)}" value="${esc(entry.expectedSamples)}" min="1"></div>
+      </div>
+      <label style="margin-top:6px;font-weight:600;display:block">Parameters to test:</label>
+      <div class="param-list" style="max-height:140px;overflow-y:auto;background:#fff;margin-bottom:10px">
+        ${CHEMIST_STATE.parameters.map(p => `
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-right:12px">
+            <input type="checkbox" value="${esc(p.ParameterID)}" class="epe-param-cb-${esc(entryId)}" ${currentParamIds.includes(p.ParameterID) ? 'checked' : ''} style="margin:0;width:auto">
+            ${esc(p.ParameterName)}
+          </label>
+        `).join('')}
+      </div>
+      <div class="row">
+        <div class="col"><label>Remarks</label><input type="text" id="epe-remarks-${esc(entryId)}" value="${esc(entry.remarks || '')}"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="btn-sm btn-save" onclick="savePrivateEntry('${esc(entryId)}')">🚀 Save & Resubmit</button>
+        <button type="button" class="btn-sm btn-cancel" onclick="refreshChemistDashboard()">Cancel</button>
+      </div>
+    </td>`;
+}
+
+async function savePrivateEntry(entryId) {
+  const clientType = document.getElementById('epe-type-' + entryId).value;
+  const clientName = document.getElementById('epe-name-' + entryId).value.trim();
+  const expectedSamples = document.getElementById('epe-samples-' + entryId).value;
+  const remarks = document.getElementById('epe-remarks-' + entryId).value;
+  const paramIds = Array.from(document.querySelectorAll(`.epe-param-cb-${entryId}:checked`)).map(cb => cb.value);
+
+  if (!clientName) { alert('Client / institution name লিখুন।'); return; }
+  if (!expectedSamples || Number(expectedSamples) <= 0) { alert('Valid expected samples দিন।'); return; }
+  if (paramIds.length === 0) { alert('কমপক্ষে একটি parameter select করুন।'); return; }
+
+  try {
+    await gsr('updatePrivateSampleEntry', entryId, { clientType, clientName, expectedSamples, parameterIds: paramIds, remarks });
+    await refreshChemistDashboard();
+    showMsg(document.getElementById('chemistView'), 'Private sample re-submitted successfully. It is now locked and re-included in chemical calculations.', 'success');
+  } catch(err) {
+    alert(err.message);
+  }
+}
+
+async function deletePrivateEntry(entryId) {
+  if (!confirm('আপনি কি নিশ্চিত যে এই ফেরত আসা (Sent Back) প্রাইভেট এন্ট্রিটি বাতিল / মুছে ফেলতে চান?')) return;
+  try {
+    await gsr('deletePrivateSampleEntry', entryId);
+    await refreshChemistDashboard();
+    showMsg(document.getElementById('chemistView'), 'Entry discarded successfully.', 'success');
+  } catch(err) {
+    alert(err.message);
+  }
+}
+
+async function privSubmitEntry() {
+  const clientType = document.getElementById('privClientType').value;
+  const clientName = document.getElementById('privClientName').value.trim();
+  const expectedSamples = document.getElementById('privExpectedSamples').value;
+  const remarks = document.getElementById('privRemarks').value;
+  const paramIds = getCheckedParamIds(document, 'priv');
+
+  if (!clientName) { alert('Enter client / institution name.'); return; }
+  if (!expectedSamples || Number(expectedSamples) <= 0) { alert('Enter expected number of samples.'); return; }
+  if (paramIds.length === 0) { alert('Select at least one parameter.'); return; }
+
+  const btn = document.getElementById('privSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    await gsr('savePrivateSampleEntry', { fyId: CHEMIST_STATE.fyId, zoneId: CHEMIST_STATE.zoneId, clientType, clientName, expectedSamples, parameterIds: paramIds, remarks });
+    document.getElementById('privClientName').value = '';
+    document.getElementById('privExpectedSamples').value = '';
+    document.getElementById('privRemarks').value = '';
+    document.querySelectorAll('input[data-group="priv"]').forEach(cb => cb.checked = false);
+    await refreshChemistDashboard();
+    showMsg(document.getElementById('chemistView'), 'Saved successfully.', 'success');
+  } catch (err) {
+    showMsg(document.getElementById('chemistView'), 'Error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save Private Sample';
+  }
+}
+
+/* =====================================================================
+   ADMIN VIEW
+   ===================================================================== */
+
+// ---- helpers to build option lists ----
+function zoneOptions(zones, selected) {
+  return zones.map(z => `<option value="${esc(z.ZoneID)}" ${z.ZoneID === selected ? 'selected' : ''}>${esc(z.ZoneName)}</option>`).join('');
+}
+function districtOptions(districts, selected) {
+  return `<option value="" ${!selected ? 'selected' : ''}>--</option>` + districts.map(d => `<option value="${esc(d.DistrictID)}" ${d.DistrictID === selected ? 'selected' : ''}>${esc(d.DistrictName)}</option>`).join('');
+}
+function parameterOptions(parameters, selected) {
+  return parameters.map(p => `<option value="${esc(p.ParameterID)}" ${p.ParameterID === selected ? 'selected' : ''}>${esc(p.ParameterName)}</option>`).join('');
+}
+function chemicalOptions(chemicals, selected) {
+  return chemicals.map(c => `<option value="${esc(c.ChemicalID)}" ${c.ChemicalID === selected ? 'selected' : ''}>${esc(c.ChemicalName)} (${esc(c.Unit)})</option>`).join('');
+}
+
+// ---- active tab memory ----
+let ADMIN_ACTIVE_TAB = 'zones';
+
+async function renderAdminView() {
+  const el = document.getElementById('adminView');
+  el.innerHTML = `<div class="loading">Loading...</div>`;
+  const data = await gsr('getAdminBootstrap');
+  window.DB = data;
+
+  el.innerHTML = `
+    <div class="tabs" id="adminTabs">
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='zones'?'active':''}" data-tab="zones">Zones</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='districts'?'active':''}" data-tab="districts">Districts</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='users'?'active':''}" data-tab="users">Users</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='projects'?'active':''}" data-tab="projects">📋 Projects</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='submissions'?'active':''}" data-tab="submissions">📊 Submissions</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='params'?'active':''}" data-tab="params">Parameters</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='chemicals'?'active':''}" data-tab="chemicals">🧪 Chemicals</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='recipe'?'active':''}" data-tab="recipe">Chemical Recipe</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='fy'?'active':''}" data-tab="fy">Fiscal Years</button>
+      <button type="button" class="tab-btn ${ADMIN_ACTIVE_TAB==='backup'?'active':''}" data-tab="backup">💾 Excel Setup & Backup</button>
+    </div>
+
+    ${renderZonesTab(data)}
+    ${renderDistrictsTab(data)}
+    ${renderUsersTab(data)}
+    ${renderProjectsTab(data)}
+    ${renderSubmissionsTab(data)}
+    ${renderParamsTab(data)}
+    ${renderChemicalsTab(data)}
+    ${renderRecipeTab(data)}
+    ${renderFYTab(data)}
+    ${renderBackupTab(data)}
+  `;
+
+  // Tabs switching
+  el.querySelectorAll('#adminTabs .tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ADMIN_ACTIVE_TAB = btn.dataset.tab;
+      el.querySelectorAll('#adminTabs .tab-btn').forEach(b => b.classList.remove('active'));
+      el.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  bindZonesTab(data);
+  bindDistrictsTab(data);
+  bindUsersTab(data);
+  bindProjectsTab(data);
+  bindSubmissionsTab(data);
+  bindParamsTab(data);
+  bindChemicalsTab(data);
+  bindRecipeTab(data);
+  bindFYTab(data);
+  bindBackupTab(data);
+}
+
+/* ======= ZONES TAB ======= */
+function renderZonesTab(data) {
+  const rows = data.zones.map(z => `
+    <tr id="zone-row-${esc(z.ZoneID)}">
+      <td>${esc(z.ZoneID)}</td>
+      <td class="zone-name-cell">${esc(z.ZoneName)}</td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editZoneRow('${esc(z.ZoneID)}','${esc(z.ZoneName)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteZone('${esc(z.ZoneID)}','${esc(z.ZoneName)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='zones'?'active':''}" id="tab-zones">
+      <div class="card">
+        <h2>Zones</h2>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>Zone Name</label><input type="text" id="newZoneName" placeholder="e.g. Zone 9"></div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addZoneBtn">+ Add Zone</button>
+            </div>
+          </div>
+        </div>
+        <table><thead><tr><th>ID</th><th>Name</th><th>Actions</th></tr></thead>
+        <tbody id="zonesTbody">${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function editZoneRow(id, name) {
+  const row = document.getElementById('zone-row-' + id);
+  if (!row) return;
+  row.classList.add('editing');
+  row.querySelector('.zone-name-cell').innerHTML = `<input type="text" value="${esc(name)}" id="edit-zone-name-${esc(id)}" style="width:100%">`;
+  const actions = row.querySelector('.td-actions');
+  actions.innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveZone('${esc(id)}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+async function saveZone(id) {
+  const name = document.getElementById('edit-zone-name-' + id).value.trim();
+  if (!name) return;
+  await gsr('adminUpdateZone', id, name);
+  renderAdminView();
+}
+
+async function deleteZone(id, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteZone', id);
+  renderAdminView();
+}
+
+function bindZonesTab(data) {
+  document.getElementById('addZoneBtn').addEventListener('click', async () => {
+    const name = document.getElementById('newZoneName').value.trim();
+    if (!name) return;
+    await gsr('adminAddZone', name);
+    renderAdminView();
+  });
+}
+
+/* ======= DISTRICTS TAB ======= */
+function renderDistrictsTab(data) {
+  const zoneMap = {}; data.zones.forEach(z => zoneMap[z.ZoneID] = z.ZoneName);
+  const rows = data.districts.map(d => `
+    <tr id="dist-row-${esc(d.DistrictID)}">
+      <td>${esc(d.DistrictID)}</td>
+      <td class="dist-name-cell">${esc(d.DistrictName)}</td>
+      <td class="dist-zone-cell">${esc(zoneMap[d.ZoneID] || d.ZoneID)}</td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editDistRow('${esc(d.DistrictID)}','${esc(d.DistrictName)}','${esc(d.ZoneID)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteDist('${esc(d.DistrictID)}','${esc(d.DistrictName)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='districts'?'active':''}" id="tab-districts">
+      <div class="card">
+        <h2>Districts</h2>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>District Name</label><input type="text" id="newDistName"></div>
+            <div class="col"><label>Zone</label><select id="newDistZone">${zoneOptions(data.zones, '')}</select></div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addDistBtn">+ Add District</button>
+            </div>
+          </div>
+        </div>
+        <table><thead><tr><th>ID</th><th>Name</th><th>Zone</th><th>Actions</th></tr></thead>
+        <tbody id="districtsTbody">${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function editDistRow(id, name, zoneId) {
+  const row = document.getElementById('dist-row-' + id);
+  if (!row) return;
+  row.classList.add('editing');
+  row.querySelector('.dist-name-cell').innerHTML = `<input type="text" value="${esc(name)}" id="edit-dist-name-${esc(id)}">`;
+  row.querySelector('.dist-zone-cell').innerHTML = `<select id="edit-dist-zone-${esc(id)}">${zoneOptions(DB.zones, zoneId)}</select>`;
+  row.querySelector('.td-actions').innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveDist('${esc(id)}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+async function saveDist(id) {
+  const name = document.getElementById('edit-dist-name-' + id).value.trim();
+  const zoneId = document.getElementById('edit-dist-zone-' + id).value;
+  if (!name) return;
+  await gsr('adminUpdateDistrict', id, name, zoneId);
+  renderAdminView();
+}
+
+async function deleteDist(id, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteDistrict', id);
+  renderAdminView();
+}
+
+function bindDistrictsTab(data) {
+  document.getElementById('addDistBtn').addEventListener('click', async () => {
+    const name = document.getElementById('newDistName').value.trim();
+    const zoneId = document.getElementById('newDistZone').value;
+    if (!name) return;
+    await gsr('adminAddDistrict', name, zoneId);
+    renderAdminView();
+  });
+}
+
+/* ======= USERS TAB ======= */
+function renderUsersTab(data) {
+  const distMap = {}; data.districts.forEach(d => distMap[d.DistrictID] = d.DistrictName);
+  const zoneMap = {}; data.zones.forEach(z => zoneMap[z.ZoneID] = z.ZoneName);
+  const rows = data.users.map(u => `
+    <tr id="user-row-${esc(u.Email).replace(/[@.]/g,'_')}">
+      <td>${esc(u.Email)}</td>
+      <td class="u-name">${esc(u.Name)}</td>
+      <td class="u-role"><span class="badge govt">${esc(u.Role)}</span></td>
+      <td class="u-dist">${esc(distMap[u.DistrictID] || u.DistrictID || '--')}</td>
+      <td class="u-zone">${esc(zoneMap[u.ZoneID] || u.ZoneID || '--')}</td>
+      <td class="u-active">${u.Active ? '✅' : '❌'}</td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editUserRow('${esc(u.Email)}')">Edit</button>
+        <button class="btn-sm" style="background:#fef3c7;color:#92400e" onclick="promptResetUserPassword('${esc(u.Email)}')">🔑 Reset</button>
+        <button class="btn-sm btn-delete" onclick="deleteUser('${esc(u.Email)}','${esc(u.Name)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='users'?'active':''}" id="tab-users">
+      <div class="card">
+        <h2>Users</h2>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>Email</label><input type="email" id="newUserEmail"></div>
+            <div class="col"><label>Name</label><input type="text" id="newUserName"></div>
+            <div class="col"><label>Role</label>
+              <select id="newUserRole"><option value="EXEN">EXEN (District)</option><option value="CHEMIST">Senior Chemist (Zone)</option><option value="ADMIN">Admin</option></select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col" id="newUserDistrictWrap"><label>District <span style="color:#9ca3af;font-weight:400">(EXEN only)</span></label><select id="newUserDistrict">${districtOptions(data.districts, '')}</select></div>
+            <div class="col" id="newUserZoneWrap" style="display:none"><label>Zone <span style="color:#9ca3af;font-weight:400">(Chemist only)</span></label><select id="newUserZone"><option value="">--</option>${zoneOptions(data.zones, '')}</select></div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addUserBtn">+ Add User</button>
+            </div>
+          </div>
+        </div>
+        <table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>District</th><th>Zone</th><th>Active</th><th>Actions</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function editUserRow(email) {
+  const safeId = email.replace(/[@.]/g,'_');
+  const row = document.getElementById('user-row-' + safeId);
+  if (!row) return;
+  const u = DB.users.find(x => x.Email === email);
+  if (!u) return;
+  row.classList.add('editing');
+  row.querySelector('.u-name').innerHTML = `<input type="text" value="${esc(u.Name)}" id="eu-name-${safeId}">`;
+  row.querySelector('.u-role').innerHTML = `<select id="eu-role-${safeId}" onchange="updateEditUserFields('${safeId}')"><option value="EXEN" ${u.Role==='EXEN'?'selected':''}>EXEN</option><option value="CHEMIST" ${u.Role==='CHEMIST'?'selected':''}>CHEMIST</option><option value="ADMIN" ${u.Role==='ADMIN'?'selected':''}>ADMIN</option></select>`;
+  const showDist = u.Role === 'EXEN';
+  const showZone = u.Role === 'CHEMIST';
+  row.querySelector('.u-dist').innerHTML = `<span id="eu-dist-wrap-${safeId}" style="display:${showDist?'block':'none'}"><select id="eu-dist-${safeId}">${districtOptions(DB.districts, u.DistrictID)}</select></span>${!showDist?'<span style="color:#9ca3af">--</span>':''}`;
+  row.querySelector('.u-zone').innerHTML = `<span id="eu-zone-wrap-${safeId}" style="display:${showZone?'block':'none'}"><select id="eu-zone-${safeId}"><option value="">--</option>${zoneOptions(DB.zones, u.ZoneID)}</select></span>${!showZone?'<span style="color:#9ca3af">--</span>':''}`;
+  row.querySelector('.u-active').innerHTML = `<select id="eu-active-${safeId}"><option value="true" ${u.Active?'selected':''}>✅ Yes</option><option value="false" ${!u.Active?'selected':''}>❌ No</option></select>`;
+  row.querySelector('.td-actions').innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveUser('${esc(email)}','${safeId}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+function updateEditUserFields(safeId) {
+  const role = document.getElementById('eu-role-' + safeId).value;
+  const distWrap = document.getElementById('eu-dist-wrap-' + safeId);
+  const zoneWrap = document.getElementById('eu-zone-wrap-' + safeId);
+  if (distWrap) distWrap.style.display = (role === 'EXEN') ? 'block' : 'none';
+  if (zoneWrap) zoneWrap.style.display = (role === 'CHEMIST') ? 'block' : 'none';
+}
+
+async function saveUser(email, safeId) {
+  const name = document.getElementById('eu-name-' + safeId).value.trim();
+  const role = document.getElementById('eu-role-' + safeId).value;
+  const distEl = document.getElementById('eu-dist-' + safeId);
+  const zoneEl = document.getElementById('eu-zone-' + safeId);
+  const districtId = distEl ? distEl.value : '';
+  const zoneId = zoneEl ? zoneEl.value : '';
+  const active = document.getElementById('eu-active-' + safeId).value === 'true';
+  if (!name) return;
+  await gsr('adminUpdateUser', email, name, role, districtId, zoneId, active);
+  renderAdminView();
+}
+
+async function deleteUser(email, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteUser', email);
+  renderAdminView();
+}
+
+function bindUsersTab(data) {
+  // Role-based show/hide
+  function updateUserFormFields() {
+    const role = document.getElementById('newUserRole').value;
+    document.getElementById('newUserDistrictWrap').style.display = (role === 'EXEN') ? '' : 'none';
+    document.getElementById('newUserZoneWrap').style.display = (role === 'CHEMIST') ? '' : 'none';
+  }
+  document.getElementById('newUserRole').addEventListener('change', updateUserFormFields);
+  updateUserFormFields();
+
+  document.getElementById('addUserBtn').addEventListener('click', async () => {
+    const email = document.getElementById('newUserEmail').value.trim();
+    const name = document.getElementById('newUserName').value.trim();
+    const role = document.getElementById('newUserRole').value;
+    const districtId = document.getElementById('newUserDistrict').value;
+    const zoneId = document.getElementById('newUserZone').value;
+    if (!email || !name) return;
+    await gsr('adminAddUser', email, name, role, districtId, zoneId);
+    renderAdminView();
+  });
+}
+
+/* ======= PROJECTS TAB (Admin) ======= */
+function formatProjectDistricts(p, distMap) {
+  if (p.IsAllDistricts || p.DistrictID === 'ALL' || (Array.isArray(p.DistrictIDs) && p.DistrictIDs.includes('ALL'))) {
+    return `<span class="badge" style="background:#dcfce7;color:#166534;font-weight:600;font-size:12px;padding:3px 8px">🌐 All Districts (সকল জেলা)</span>`;
+  }
+  let ids = [];
+  if (Array.isArray(p.DistrictIDs)) ids = p.DistrictIDs;
+  else if (p.DistrictID) ids = p.DistrictID.split(',').map(s => s.trim()).filter(Boolean);
+
+  if (ids.length === 0) {
+    return `<span style="color:#ef4444;font-style:italic">None</span>`;
+  }
+  const names = ids.map(id => distMap[id] || id);
+  if (ids.length <= 3) {
+    return `<span class="badge govt" style="margin-right:4px">${ids.length} Districts:</span> <span style="font-size:12px;color:#334155">${esc(names.join(', '))}</span>`;
+  }
+  const preview = names.slice(0, 3).join(', ');
+  return `<span class="badge govt" style="margin-right:4px" title="${esc(names.join(', '))}">📍 ${ids.length} Districts:</span> <span style="font-size:12px;color:#334155">${esc(preview)}</span> <span style="font-size:11px;color:#64748b;font-weight:500">+${ids.length - 3} more</span>`;
+}
+
+function renderDistrictSelector(prefix, selectedDistIds = [], isAll = true) {
+  const zoneMap = {}; DB.zones.forEach(z => zoneMap[z.ZoneID] = z.ZoneName);
+  const distCheckboxes = DB.districts.map(d => {
+    const checked = !isAll && selectedDistIds.includes(d.DistrictID);
+    const zName = zoneMap[d.ZoneID] || d.ZoneID;
+    return `
+      <label class="proj-dist-item" data-name="${esc(d.DistrictName).toLowerCase()}" data-zone="${esc(zName).toLowerCase()}" 
+        style="display:flex;align-items:center;gap:6px;background:#fff;padding:5px 8px;border-radius:4px;border:1px solid #e2e8f0;font-size:12px;cursor:pointer">
+        <input type="checkbox" class="${prefix}-dist-cb" value="${esc(d.DistrictID)}" ${checked ? 'checked' : ''} onchange="updateProjectDistCount('${prefix}')" style="margin:0;width:auto">
+        <span style="flex:1">${esc(d.DistrictName)}</span>
+        <span style="font-size:10px;color:#64748b;background:#f1f5f9;padding:1px 5px;border-radius:3px">${esc(zName)}</span>
+      </label>`;
+  }).join('');
+
+  return `
+    <div style="margin:10px 0 14px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px">
+      <label style="font-weight:700;color:var(--text);margin-bottom:8px;display:block">
+        District Coverage (প্রকল্পের আওতাভুক্ত জেলা):
+      </label>
+      <div style="display:flex;gap:20px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <label style="cursor:pointer;display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;margin-bottom:0">
+          <input type="radio" name="${prefix}-scope" value="ALL" ${isAll ? 'checked' : ''} onchange="toggleProjectScope('${prefix}')" style="margin:0;width:auto">
+          🌐 All Districts (সকল জেলার জন্য প্রযোজ্য)
+        </label>
+        <label style="cursor:pointer;display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;margin-bottom:0">
+          <input type="radio" name="${prefix}-scope" value="SELECTED" ${!isAll ? 'checked' : ''} onchange="toggleProjectScope('${prefix}')" style="margin:0;width:auto">
+          📍 Specific Districts (নির্দিষ্ট কিছু জেলা)
+        </label>
+      </div>
+
+      <div id="${prefix}-all-notice" style="display:${isAll ? 'block' : 'none'};background:#e0f2fe;border:1px solid #bae6fd;color:#0369a1;padding:10px 14px;border-radius:6px;font-size:13px">
+        <strong>✓ অল-ডিস্ট্রিক্ট প্রজেক্ট:</strong> এই প্রজেক্টটি সকল জেলার (${DB.districts.length}টি জেলা) EXEN-দের ড্রপডাউনে পাওয়া যাবে। আলাদাভাবে জেলা সিলেক্ট করার প্রয়োজন নেই।
+      </div>
+
+      <div id="${prefix}-dist-picker" style="display:${isAll ? 'none' : 'block'};margin-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <input type="text" id="${prefix}-dist-search" placeholder="🔍 Search district or zone..." 
+            onkeyup="filterProjectDistricts('${prefix}')" 
+            style="width:220px;margin-bottom:0;padding:5px 9px;font-size:12px;border:1px solid #cbd5e1;border-radius:4px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <button type="button" class="btn-sm secondary" onclick="bulkCheckDistricts('${prefix}', true)">✓ Select All (${DB.districts.length})</button>
+            <button type="button" class="btn-sm secondary" onclick="bulkCheckDistricts('${prefix}', false)">✕ Deselect All</button>
+          </div>
+        </div>
+        <div id="${prefix}-dist-grid" style="max-height:190px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:6px;background:#f1f5f9;padding:8px;border:1px solid #cbd5e1;border-radius:6px">
+          ${distCheckboxes}
+        </div>
+        <div style="font-size:12px;font-weight:600;color:#0369a1;margin-top:6px" id="${prefix}-selected-count">
+          ${!isAll ? selectedDistIds.length + ' districts selected' : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleProjectScope(prefix) {
+  const scopeEl = document.querySelector(`input[name="${prefix}-scope"]:checked`);
+  const scope = scopeEl ? scopeEl.value : 'ALL';
+  const allNotice = document.getElementById(`${prefix}-all-notice`);
+  const distPicker = document.getElementById(`${prefix}-dist-picker`);
+  if (scope === 'ALL') {
+    if (allNotice) allNotice.style.display = 'block';
+    if (distPicker) distPicker.style.display = 'none';
+  } else {
+    if (allNotice) allNotice.style.display = 'none';
+    if (distPicker) distPicker.style.display = 'block';
+    updateProjectDistCount(prefix);
+  }
+}
+
+function bulkCheckDistricts(prefix, check) {
+  const cbs = document.querySelectorAll(`.${prefix}-dist-cb`);
+  cbs.forEach(cb => {
+    const parent = cb.closest('.proj-dist-item');
+    if (!parent || parent.style.display !== 'none') {
+      cb.checked = check;
+    }
+  });
+  updateProjectDistCount(prefix);
+}
+
+function filterProjectDistricts(prefix) {
+  const searchEl = document.getElementById(`${prefix}-dist-search`);
+  const q = (searchEl ? searchEl.value : '').toLowerCase().trim();
+  const items = document.querySelectorAll(`#${prefix}-dist-grid .proj-dist-item`);
+  items.forEach(item => {
+    const name = item.dataset.name || '';
+    const zone = item.dataset.zone || '';
+    item.style.display = (!q || name.includes(q) || zone.includes(q)) ? 'flex' : 'none';
+  });
+}
+
+function updateProjectDistCount(prefix) {
+  const countEl = document.getElementById(`${prefix}-selected-count`);
+  if (!countEl) return;
+  const checked = document.querySelectorAll(`.${prefix}-dist-cb:checked`).length;
+  countEl.textContent = `✓ ${checked} district(s) selected`;
+}
+
+function getProjectScopeData(prefix) {
+  const scopeEl = document.querySelector(`input[name="${prefix}-scope"]:checked`);
+  const scope = scopeEl ? scopeEl.value : 'ALL';
+  if (scope === 'ALL') return ['ALL'];
+  return Array.from(document.querySelectorAll(`.${prefix}-dist-cb:checked`)).map(cb => cb.value);
+}
+
+function renderProjectsTab(data) {
+  const distMap = {}; data.districts.forEach(d => distMap[d.DistrictID] = d.DistrictName);
+  const fyMap = {}; data.fiscalYears.forEach(f => fyMap[f.FYID] = f.FYLabel);
+  const activeFY = data.fiscalYears.find(f => f.IsActive) || data.fiscalYears[0] || {};
+
+  const rows = (data.projects || []).map(p => `
+    <tr id="proj-row-${esc(p.ProjectID)}">
+      <td class="pr-name" style="font-weight:600">${esc(p.ProjectName)}</td>
+      <td class="pr-dist">${formatProjectDistricts(p, distMap)}</td>
+      <td class="pr-fy"><span class="badge ${p.FYID === activeFY.FYID ? 'govt' : ''}">${esc(fyMap[p.FYID] || p.FYID)}</span></td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editProjectRow('${esc(p.ProjectID)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteProject('${esc(p.ProjectID)}','${esc(p.ProjectName)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='projects'?'active':''}" id="tab-projects">
+      <div class="card">
+        <h2>📋 Projects (Admin Managed)</h2>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:14px">
+          Admin এখান থেকে প্রজেক্ট তৈরি ও ম্যানেজ করবেন। কোনো প্রজেক্ট সারা দেশের <strong>সকল জেলার</strong> জন্য হতে পারে, আবার <strong>নির্দিষ্ট কিছু জেলার</strong> জন্যও হতে পারে।
+        </p>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col" style="flex:2"><label>Project Name</label><input type="text" id="newProjName" placeholder="e.g. National Safe Water Supply Project"></div>
+            <div class="col"><label>Fiscal Year</label><select id="newProjFY">${fyOptions(data.fiscalYears, activeFY.FYID)}</select></div>
+          </div>
+          ${renderDistrictSelector('new', [], true)}
+          <div style="display:flex;justify-content:flex-end">
+            <button type="button" id="addProjBtn" style="padding:10px 22px">+ Add Project</button>
+          </div>
+        </div>
+        <table>
+          <thead><tr><th>Project Name</th><th>Applicable Districts</th><th>Fiscal Year</th><th>Actions</th></tr></thead>
+          <tbody>${rows.length ? rows : '<tr><td colspan="4" style="color:#9ca3af;text-align:center;padding:16px">No projects yet. Add one above.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function editProjectRow(id) {
+  const row = document.getElementById('proj-row-' + id);
+  const p = DB.projects.find(x => x.ProjectID === id);
+  if (!row || !p) return;
+
+  const isAll = p.IsAllDistricts || p.DistrictID === 'ALL' || (Array.isArray(p.DistrictIDs) && p.DistrictIDs.includes('ALL'));
+  let selectedIds = [];
+  if (!isAll) {
+    if (Array.isArray(p.DistrictIDs)) selectedIds = p.DistrictIDs;
+    else if (p.DistrictID) selectedIds = p.DistrictID.split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  row.classList.add('editing');
+  row.innerHTML = `
+    <td colspan="4" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
+      <div style="font-weight:700;margin-bottom:12px;color:#92400e;font-size:14px">✏️ Edit Project: ${esc(p.ProjectName)}</div>
+      <div class="row">
+        <div class="col" style="flex:2"><label>Project Name</label><input type="text" value="${esc(p.ProjectName)}" id="epr-name-${esc(id)}"></div>
+        <div class="col"><label>Fiscal Year</label><select id="epr-fy-${esc(id)}">${fyOptions(DB.fiscalYears, p.FYID)}</select></div>
+      </div>
+      ${renderDistrictSelector('edit-' + id, selectedIds, isAll)}
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button class="btn-sm btn-save" onclick="saveProject('${esc(id)}')">💾 Save Changes</button>
+        <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>
+      </div>
+    </td>`;
+}
+
+async function saveProject(id) {
+  const name = document.getElementById('epr-name-' + id).value.trim();
+  const fyId = document.getElementById('epr-fy-' + id).value;
+  if (!name) { alert('Project name দিন।'); return; }
+  const distIds = getProjectScopeData('edit-' + id);
+  if (distIds.length === 0) { alert('কমপক্ষে একটি জেলা নির্বাচন করুন অথবা All Districts বেছে নিন।'); return; }
+  await gsr('adminUpdateProject', id, name, distIds, fyId);
+  renderAdminView();
+}
+
+async function deleteProject(id, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteProject', id);
+  renderAdminView();
+}
+
+function bindProjectsTab(data) {
+  document.getElementById('addProjBtn').addEventListener('click', async () => {
+    const name = document.getElementById('newProjName').value.trim();
+    const fyId = document.getElementById('newProjFY').value;
+    if (!name) { alert('Project name দিন।'); return; }
+    const distIds = getProjectScopeData('new');
+    if (distIds.length === 0) { alert('কমপক্ষে একটি জেলা নির্বাচন করুন অথবা All Districts বেছে নিন।'); return; }
+    await gsr('adminAddProject', name, distIds, fyId);
+    renderAdminView();
+  });
+}
+
+/* ======= SUBMISSIONS TAB (Admin - All District & Private Entries) ======= */
+function renderSubmissionsTab(data) {
+  const distMap = {}; data.districts.forEach(d => distMap[d.DistrictID] = d.DistrictName);
+  const zoneMap = {}; data.zones.forEach(z => zoneMap[z.ZoneID] = z.ZoneName);
+  const distZoneMap = {}; data.districts.forEach(d => distZoneMap[d.DistrictID] = zoneMap[d.ZoneID] || d.ZoneID);
+  const fyMap = {}; data.fiscalYears.forEach(f => fyMap[f.FYID] = f.FYLabel);
+  const projMap = {}; (data.projects || []).forEach(p => projMap[p.ProjectID] = p.ProjectName);
+  const paramMap = {}; data.parameters.forEach(p => paramMap[p.ParameterID] = p.ParameterName);
+
+  // Government / District submissions (from EXEN)
+  const govtEntries = (data.sampleEntries || []).map(e => ({
+    entryId: e.EntryID,
+    isPrivate: false,
+    districtId: e.DistrictID,
+    districtName: distMap[e.DistrictID] || e.DistrictID,
+    zoneId: (data.districts.find(d => d.DistrictID === e.DistrictID) || {}).ZoneID || '',
+    zoneName: distZoneMap[e.DistrictID] || '',
+    fyId: e.FYID,
+    fyLabel: fyMap[e.FYID] || e.FYID,
+    projectId: e.ProjectID,
+    projectName: projMap[e.ProjectID] || e.ProjectID,
+    expectedSamples: Number(e.ExpectedSamples) || 0,
+    parameterIds: parseParamIds(e.ParameterIDs),
+    remarks: e.Remarks || '',
+    status: e.Status || 'SUBMITTED',
+    sendBackReason: e.SendBackReason || '',
+    enteredBy: e.EnteredBy || '',
+    enteredAt: e.EnteredAt || ''
+  }));
+
+  // Private sample submissions (from Chemist)
+  const privEntries = (data.privateSampleEntries || []).map(e => ({
+    entryId: e.EntryID,
+    isPrivate: true,
+    districtId: '',
+    districtName: '-- (Zonal Private)',
+    zoneId: e.ZoneID,
+    zoneName: zoneMap[e.ZoneID] || e.ZoneID,
+    fyId: e.FYID,
+    fyLabel: fyMap[e.FYID] || e.FYID,
+    clientType: e.ClientType,
+    clientName: e.ClientName,
+    projectId: '',
+    projectName: `[Private: ${e.ClientType}] ${e.ClientName}`,
+    expectedSamples: Number(e.ExpectedSamples) || 0,
+    parameterIds: parseParamIds(e.ParameterIDs),
+    remarks: e.Remarks || '',
+    status: e.Status || 'SUBMITTED',
+    sendBackReason: e.SendBackReason || '',
+    enteredBy: e.EnteredBy || 'Sr. Chemist',
+    enteredAt: e.EnteredAt || ''
+  }));
+
+  const entries = govtEntries.concat(privEntries);
+
+  const rows = entries.map(e => {
+    const isSentBack = e.status === 'SENT_BACK';
+    const statusBadge = isSentBack
+      ? `<div>
+           <span class="badge" style="background:#fee2e2;color:#991b1b;font-weight:600;padding:3px 8px" title="${esc(e.sendBackReason || '')}">⚠️ Sent Back (Excluded)</span>
+           <div style="font-size:11px;color:#dc2626;margin-top:3px"><strong>Reason:</strong> ${esc(e.sendBackReason || 'Revision requested')}</div>
+         </div>`
+      : `<span class="badge" style="background:#dcfce7;color:#166534;font-weight:600;padding:3px 8px">🔒 Submitted (Active)</span>`;
+
+    const typeBadge = e.isPrivate
+      ? `<span class="badge" style="background:#e0e7ff;color:#3730a3;font-size:11px">🧪 Private (Chemist)</span>`
+      : `<span class="badge govt" style="font-size:11px">🏢 Govt (EXEN)</span>`;
+
+    return `
+      <tr id="admin-subm-row-${esc(e.entryId)}" class="admin-subm-item" 
+        data-district="${esc(e.districtId)}" data-fy="${esc(e.fyId)}" data-type="${e.isPrivate ? 'private' : 'govt'}"
+        data-status="${esc(e.status)}"
+        data-search="${esc((e.projectName + ' ' + e.districtName + ' ' + e.zoneName + ' ' + e.enteredBy + ' ' + e.remarks + ' ' + (e.sendBackReason || '')).toLowerCase())}">
+        <td>
+          <div style="margin-bottom:3px">${typeBadge}</div>
+          <strong>${esc(e.isPrivate ? e.zoneName : e.districtName)}</strong>
+          ${!e.isPrivate ? `<div style="font-size:11px;color:#64748b">${esc(e.zoneName)}</div>` : ''}
+        </td>
+        <td>
+          <strong>${esc(e.projectName)}</strong>
+          ${e.isPrivate ? `<div style="font-size:11px;color:#4338ca">Client: ${esc(e.clientName)} (${esc(e.clientType)})</div>` : ''}
+        </td>
+        <td style="font-weight:700;font-size:14px;color:#0d6efd">${esc(e.expectedSamples)}</td>
+        <td style="max-width:240px;font-size:12px">${esc(e.parameterIds.map(pid => paramMap[pid] || pid).join(', '))}</td>
+        <td>${statusBadge}</td>
+        <td style="font-size:12px;color:#64748b">${esc(e.remarks || '-')}</td>
+        <td style="font-size:12px">${esc(e.enteredBy)}<div style="font-size:10px;color:#94a3b8">${esc(e.enteredAt)}</div></td>
+        <td><span class="badge" style="background:#f1f5f9;color:#334155">${esc(e.fyLabel)}</span></td>
+        <td>
+          <div class="td-actions" style="flex-direction:column;align-items:stretch;gap:4px">
+            ${!isSentBack ? `
+              <button type="button" class="btn-sm" style="background:#fff1f2;color:#be123c;border:1px solid #fecdd3;font-weight:600" onclick="openSendBackPrompt('${esc(e.entryId)}')">↩️ Send Back</button>
+            ` : ''}
+            <button type="button" class="btn-sm btn-edit" onclick="${e.isPrivate ? `editAdminPrivateSubmission('${esc(e.entryId)}')` : `editAdminSubmission('${esc(e.entryId)}')`}">Edit</button>
+            <button type="button" class="btn-sm btn-delete" onclick="${e.isPrivate ? `deleteAdminPrivateSubmission('${esc(e.entryId)}')` : `deleteAdminSubmission('${esc(e.entryId)}')`}">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='submissions'?'active':''}" id="tab-submissions">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <h2 style="margin:0">📊 All Submitted Sample Requirements</h2>
+          <span class="badge govt" id="adminSubmCountBadge" style="font-size:12px">${entries.length} Submissions</span>
+        </div>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:14px">
+          সকল জেলার EXEN এবং জোনাল ল্যাবের কেমিস্টদের সাবমিট করা ডেটা এখান থেকে মনিটর, ভুল হলে <strong>↩️ Send Back</strong>, সরাসরি সংশোধন (Edit) অথবা মুছে ফেলতে (Delete) পারবেন। কোনো এন্ট্রি Send Back করলে তা কেমিক্যাল ক্যালকুলেশন থেকে বাদ রাখা হয়।
+        </p>
+        <div class="add-form-box" style="padding:14px;background:#f8fafc;margin-bottom:14px">
+          <div class="row" style="align-items:flex-end">
+            <div class="col">
+              <label>Filter by District</label>
+              <select id="submFilterDistrict" onchange="filterAdminSubmissions()">
+                <option value="">-- All Districts (${data.districts.length}) --</option>
+                ${districtOptions(data.districts, '')}
+              </select>
+            </div>
+            <div class="col">
+              <label>Filter by Fiscal Year</label>
+              <select id="submFilterFY" onchange="filterAdminSubmissions()">
+                <option value="">-- All Fiscal Years --</option>
+                ${fyOptions(data.fiscalYears, '')}
+              </select>
+            </div>
+            <div class="col">
+              <label>Source Type</label>
+              <select id="submFilterType" onchange="filterAdminSubmissions()">
+                <option value="">-- All Sources --</option>
+                <option value="govt">🏢 Govt / EXEN</option>
+                <option value="private">🧪 Private / Chemist</option>
+              </select>
+            </div>
+            <div class="col">
+              <label>Status</label>
+              <select id="submFilterStatus" onchange="filterAdminSubmissions()">
+                <option value="">-- All Statuses --</option>
+                <option value="SUBMITTED">🔒 Submitted (Active)</option>
+                <option value="SENT_BACK">⚠️ Sent Back (Excluded)</option>
+              </select>
+            </div>
+            <div class="col" style="flex:1.5">
+              <label>Search (Project, Client, District, User, Remarks)</label>
+              <input type="text" id="submFilterKeyword" placeholder="🔍 Search text..." onkeyup="filterAdminSubmissions()" style="margin-bottom:0">
+            </div>
+            <div class="col" style="max-width:90px">
+              <button type="button" class="ghost btn-sm" onclick="resetAdminSubmFilters()" style="width:100%;height:38px">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>District & Zone</th>
+              <th>Project / Client</th>
+              <th>Expected Samples</th>
+              <th>Parameters</th>
+              <th>Status</th>
+              <th>Remarks</th>
+              <th>Submitted By</th>
+              <th>Fiscal Year</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="adminSubmTbody">
+            ${rows.length ? rows : '<tr><td colspan="9" style="text-align:center;padding:16px;color:#94a3b8">No submitted entries found.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function filterAdminSubmissions() {
+  const distVal = (document.getElementById('submFilterDistrict') || {}).value || '';
+  const fyVal = (document.getElementById('submFilterFY') || {}).value || '';
+  const typeVal = (document.getElementById('submFilterType') || {}).value || '';
+  const statusVal = (document.getElementById('submFilterStatus') || {}).value || '';
+  const q = ((document.getElementById('submFilterKeyword') || {}).value || '').toLowerCase().trim();
+
+  let visibleCount = 0;
+  const items = document.querySelectorAll('.admin-subm-item');
+  items.forEach(item => {
+    const dMatch = !distVal || item.dataset.district === distVal;
+    const fyMatch = !fyVal || item.dataset.fy === fyVal;
+    const typeMatch = !typeVal || item.dataset.type === typeVal;
+    const statusMatch = !statusVal || item.dataset.status === statusVal;
+    const qMatch = !q || (item.dataset.search || '').includes(q);
+    if (dMatch && fyMatch && typeMatch && statusMatch && qMatch) {
+      item.style.display = '';
+      visibleCount++;
+    } else {
+      item.style.display = 'none';
+    }
+  });
+
+  const badge = document.getElementById('adminSubmCountBadge');
+  if (badge) badge.textContent = `${visibleCount} Submissions Shown`;
+}
+
+function resetAdminSubmFilters() {
+  const dSel = document.getElementById('submFilterDistrict'); if (dSel) dSel.value = '';
+  const fySel = document.getElementById('submFilterFY'); if (fySel) fySel.value = '';
+  const tSel = document.getElementById('submFilterType'); if (tSel) tSel.value = '';
+  const sSel = document.getElementById('submFilterStatus'); if (sSel) sSel.value = '';
+  const kw = document.getElementById('submFilterKeyword'); if (kw) kw.value = '';
+  filterAdminSubmissions();
+}
+
+async function openSendBackPrompt(entryId) {
+  const reason = prompt('এই Submission টি ফেরত পাঠানোর (Send Back) কারণ উল্লেখ করুন (যেমন: নমুনা সংখ্যা যাচাই প্রয়োজন / প্যারামিটার সংশোধন করতে হবে):', 'অ্যাডমিন কর্তৃক সংশোধনের জন্য ফেরত পাঠানো হয়েছে।');
+  if (reason === null) return;
+  if (!reason.trim()) {
+    alert('অনুগ্রহ করে ফেরত পাঠানোর কারণ লিখুন।');
+    return;
+  }
+  try {
+    await gsr('adminSendBackEntry', entryId, reason.trim());
+    ADMIN_ACTIVE_TAB = 'submissions';
+    await renderAdminView();
+    alert('এন্ট্রিটি সফলভাবে ফেরত পাঠানো (Sent Back) হয়েছে। এটি কেমিক্যাল ক্যালকুলেশন থেকে বাদ রাখা হয়েছে এবং সংশ্লিষ্ট ইউজার এটি সংশোধন করে পুনরায় জমা দিতে পারবেন।');
+  } catch(err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+function editAdminSubmission(entryId) {
+  const row = document.getElementById('admin-subm-row-' + entryId);
+  const entry = DB.sampleEntries.find(e => e.EntryID === entryId);
+  if (!row || !entry) return;
+
+  const currentParamIds = parseParamIds(entry.ParameterIDs);
+  const projOptions = DB.projects.map(p => 
+    `<option value="${esc(p.ProjectID)}" ${p.ProjectID === entry.ProjectID ? 'selected' : ''}>${esc(p.ProjectName)}</option>`
+  ).join('');
+  const distOpts = districtOptions(DB.districts, entry.DistrictID);
+
+  row.classList.add('editing');
+  row.innerHTML = `
+    <td colspan="9" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
+      <div style="font-weight:700;color:#92400e;margin-bottom:10px;font-size:14px">✏️ Admin Edit: District Sample Entry (${esc(entryId)})</div>
+      <div class="row">
+        <div class="col"><label>District</label><select id="ase-dist-${esc(entryId)}">${distOpts}</select></div>
+        <div class="col"><label>Project</label><select id="ase-proj-${esc(entryId)}">${projOptions}</select></div>
+        <div class="col"><label>Expected Samples</label><input type="number" id="ase-samples-${esc(entryId)}" value="${esc(entry.ExpectedSamples)}" min="1"></div>
+        <div class="col"><label>Remarks</label><input type="text" id="ase-remarks-${esc(entryId)}" value="${esc(entry.Remarks || '')}"></div>
+      </div>
+      <label style="margin-top:8px;font-weight:600;display:block">Parameters to test:</label>
+      <div class="param-list" style="max-height:140px;overflow-y:auto;background:#fff;margin-bottom:12px">
+        ${DB.parameters.map(p => `
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-right:12px">
+            <input type="checkbox" value="${esc(p.ParameterID)}" class="ase-param-cb-${esc(entryId)}" ${currentParamIds.includes(p.ParameterID) ? 'checked' : ''} style="margin:0;width:auto">
+            ${esc(p.ParameterName)}
+          </label>
+        `).join('')}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" class="btn-sm btn-save" onclick="saveAdminSubmission('${esc(entryId)}')">💾 Update Entry</button>
+        <button type="button" class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>
+      </div>
+    </td>`;
+}
+
+async function saveAdminSubmission(entryId) {
+  const districtId = document.getElementById('ase-dist-' + entryId).value;
+  const projectId = document.getElementById('ase-proj-' + entryId).value;
+  const expectedSamples = document.getElementById('ase-samples-' + entryId).value;
+  const remarks = document.getElementById('ase-remarks-' + entryId).value;
+  const paramIds = Array.from(document.querySelectorAll(`.ase-param-cb-${entryId}:checked`)).map(cb => cb.value);
+
+  if (!projectId) { alert('Project select করুন।'); return; }
+  if (!expectedSamples || Number(expectedSamples) <= 0) { alert('Valid expected samples দিন।'); return; }
+  if (paramIds.length === 0) { alert('কমপক্ষে একটি parameter select করুন।'); return; }
+
+  await gsr('updateSampleEntry', entryId, { districtId, projectId, expectedSamples, parameterIds: paramIds, remarks });
+  ADMIN_ACTIVE_TAB = 'submissions';
+  renderAdminView();
+}
+
+async function deleteAdminSubmission(entryId) {
+  if (!confirm('আপনি কি নিশ্চিত যে এই Entry টি ডাটাবেজ থেকে মুছে ফেলতে চান? এটি Chemical Prediction ও ড্যাশবোর্ডে প্রভাব ফেলবে।')) return;
+  await gsr('deleteSampleEntry', entryId);
+  ADMIN_ACTIVE_TAB = 'submissions';
+  renderAdminView();
+}
+
+function editAdminPrivateSubmission(entryId) {
+  const row = document.getElementById('admin-subm-row-' + entryId);
+  const entry = DB.privateSampleEntries.find(e => e.EntryID === entryId);
+  if (!row || !entry) return;
+
+  const currentParamIds = parseParamIds(entry.ParameterIDs);
+  row.classList.add('editing');
+  row.innerHTML = `
+    <td colspan="9" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
+      <div style="font-weight:700;color:#92400e;margin-bottom:10px;font-size:14px">✏️ Admin Edit: Private Sample Entry (${esc(entryId)})</div>
+      <div class="row">
+        <div class="col"><label>Client Type</label>
+          <select id="aep-type-${esc(entryId)}">
+            <option value="OTHER_GOVT" ${entry.ClientType==='OTHER_GOVT'?'selected':''}>Other Government Institution</option>
+            <option value="PRIVATE_ORG" ${entry.ClientType==='PRIVATE_ORG'?'selected':''}>Private Organization</option>
+            <option value="WALK_IN" ${entry.ClientType==='WALK_IN'?'selected':''}>Walk-in Client</option>
+          </select>
+        </div>
+        <div class="col"><label>Client Name</label><input type="text" id="aep-name-${esc(entryId)}" value="${esc(entry.ClientName)}"></div>
+        <div class="col"><label>Expected Samples</label><input type="number" id="aep-samples-${esc(entryId)}" value="${esc(entry.ExpectedSamples)}" min="1"></div>
+        <div class="col"><label>Remarks</label><input type="text" id="aep-remarks-${esc(entryId)}" value="${esc(entry.Remarks || '')}"></div>
+      </div>
+      <label style="margin-top:8px;font-weight:600;display:block">Parameters to test:</label>
+      <div class="param-list" style="max-height:140px;overflow-y:auto;background:#fff;margin-bottom:12px">
+        ${DB.parameters.map(p => `
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-right:12px">
+            <input type="checkbox" value="${esc(p.ParameterID)}" class="aep-param-cb-${esc(entryId)}" ${currentParamIds.includes(p.ParameterID) ? 'checked' : ''} style="margin:0;width:auto">
+            ${esc(p.ParameterName)}
+          </label>
+        `).join('')}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" class="btn-sm btn-save" onclick="saveAdminPrivateSubmission('${esc(entryId)}')">💾 Update Entry</button>
+        <button type="button" class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>
+      </div>
+    </td>`;
+}
+
+async function saveAdminPrivateSubmission(entryId) {
+  const clientType = document.getElementById('aep-type-' + entryId).value;
+  const clientName = document.getElementById('aep-name-' + entryId).value.trim();
+  const expectedSamples = document.getElementById('aep-samples-' + entryId).value;
+  const remarks = document.getElementById('aep-remarks-' + entryId).value;
+  const paramIds = Array.from(document.querySelectorAll(`.aep-param-cb-${entryId}:checked`)).map(cb => cb.value);
+
+  if (!clientName) { alert('Client name লিখুন।'); return; }
+  if (!expectedSamples || Number(expectedSamples) <= 0) { alert('Valid expected samples দিন।'); return; }
+  if (paramIds.length === 0) { alert('কমপক্ষে একটি parameter select করুন।'); return; }
+
+  await gsr('updatePrivateSampleEntry', entryId, { clientType, clientName, expectedSamples, parameterIds: paramIds, remarks });
+  ADMIN_ACTIVE_TAB = 'submissions';
+  renderAdminView();
+}
+
+async function deleteAdminPrivateSubmission(entryId) {
+  if (!confirm('আপনি কি নিশ্চিত যে এই Private Entry টি ডাটাবেজ থেকে মুছে ফেলতে চান? এটি Chemical Prediction ও ড্যাশবোর্ডে প্রভাব ফেলবে।')) return;
+  await gsr('deletePrivateSampleEntry', entryId);
+  ADMIN_ACTIVE_TAB = 'submissions';
+  renderAdminView();
+}
+
+function bindSubmissionsTab(data) {
+  // Handled inline
+}
+
+/* ======= PARAMETERS TAB ======= */
+function renderParamsTab(data) {
+  const rows = data.parameters.map(p => `
+    <tr id="param-row-${esc(p.ParameterID)}">
+      <td>${esc(p.ParameterID)}</td>
+      <td class="p-name">${esc(p.ParameterName)}</td>
+      <td class="p-unit">${esc(p.Unit)}</td>
+      <td class="p-cat">${esc(p.Category)}</td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editParamRow('${esc(p.ParameterID)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteParam('${esc(p.ParameterID)}','${esc(p.ParameterName)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='params'?'active':''}" id="tab-params">
+      <div class="card">
+        <h2>Parameters</h2>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>Name</label><input type="text" id="newParamName" placeholder="e.g. Fluoride (F-)"></div>
+            <div class="col"><label>Unit</label><input type="text" id="newParamUnit" placeholder="e.g. mg/L"></div>
+            <div class="col"><label>Category</label><input type="text" id="newParamCategory" placeholder="Chemical / Physical / Bacteriological"></div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addParamBtn">+ Add Parameter</button>
+            </div>
+          </div>
+        </div>
+        <table><thead><tr><th>ID</th><th>Name</th><th>Unit</th><th>Category</th><th>Actions</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function editParamRow(id) {
+  const row = document.getElementById('param-row-' + id);
+  const p = DB.parameters.find(x => x.ParameterID === id);
+  if (!row || !p) return;
+  row.classList.add('editing');
+  row.querySelector('.p-name').innerHTML = `<input type="text" value="${esc(p.ParameterName)}" id="ep-name-${esc(id)}">`;
+  row.querySelector('.p-unit').innerHTML = `<input type="text" value="${esc(p.Unit)}" id="ep-unit-${esc(id)}" style="width:80px">`;
+  row.querySelector('.p-cat').innerHTML = `<input type="text" value="${esc(p.Category)}" id="ep-cat-${esc(id)}">`;
+  row.querySelector('.td-actions').innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveParam('${esc(id)}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+async function saveParam(id) {
+  const name = document.getElementById('ep-name-' + id).value.trim();
+  const unit = document.getElementById('ep-unit-' + id).value.trim();
+  const category = document.getElementById('ep-cat-' + id).value.trim();
+  if (!name) return;
+  await gsr('adminUpdateParameter', id, name, unit, category);
+  renderAdminView();
+}
+
+async function deleteParam(id, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteParameter', id);
+  renderAdminView();
+}
+
+function bindParamsTab(data) {
+  document.getElementById('addParamBtn').addEventListener('click', async () => {
+    const name = document.getElementById('newParamName').value.trim();
+    const unit = document.getElementById('newParamUnit').value.trim();
+    const category = document.getElementById('newParamCategory').value.trim();
+    if (!name) return;
+    await gsr('adminAddParameter', name, unit, category);
+    renderAdminView();
+  });
+}
+
+/* ======= CHEMICALS (MASTER LIST) TAB ======= */
+function renderChemicalsTab(data) {
+  const rows = data.chemicals.map(c => `
+    <tr id="chem-row-${esc(c.ChemicalID)}">
+      <td>${esc(c.ChemicalID)}</td>
+      <td class="c-name">${esc(c.ChemicalName)}</td>
+      <td class="c-unit">${esc(c.Unit)}</td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editChemRow('${esc(c.ChemicalID)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteChem('${esc(c.ChemicalID)}','${esc(c.ChemicalName)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='chemicals'?'active':''}" id="tab-chemicals">
+      <div class="card">
+        <div class="section-header">
+          <h2>🧪 Master Chemical List</h2>
+        </div>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:14px">
+          এখানে সমস্ত chemicals এর central list। Chemical Recipe-এ এই list থেকে dropdown দিয়ে chemical select করা হবে।
+        </p>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>Chemical Name</label><input type="text" id="newChemName" placeholder="e.g. Sodium Thiosulfate"></div>
+            <div class="col"><label>Default Unit</label><input type="text" id="newChemUnit" placeholder="e.g. mL, g, kit"></div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addChemBtn">+ Add Chemical</button>
+            </div>
+          </div>
+        </div>
+        <table><thead><tr><th>ID</th><th>Chemical Name</th><th>Default Unit</th><th>Actions</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function editChemRow(id) {
+  const row = document.getElementById('chem-row-' + id);
+  const c = DB.chemicals.find(x => x.ChemicalID === id);
+  if (!row || !c) return;
+  row.classList.add('editing');
+  row.querySelector('.c-name').innerHTML = `<input type="text" value="${esc(c.ChemicalName)}" id="ec-name-${esc(id)}">`;
+  row.querySelector('.c-unit').innerHTML = `<input type="text" value="${esc(c.Unit)}" id="ec-unit-${esc(id)}" style="width:80px">`;
+  row.querySelector('.td-actions').innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveChem('${esc(id)}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+async function saveChem(id) {
+  const name = document.getElementById('ec-name-' + id).value.trim();
+  const unit = document.getElementById('ec-unit-' + id).value.trim();
+  if (!name) return;
+  await gsr('adminUpdateChemical', id, name, unit);
+  renderAdminView();
+}
+
+async function deleteChem(id, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteChemical', id);
+  renderAdminView();
+}
+
+function bindChemicalsTab(data) {
+  document.getElementById('addChemBtn').addEventListener('click', async () => {
+    const name = document.getElementById('newChemName').value.trim();
+    const unit = document.getElementById('newChemUnit').value.trim();
+    if (!name) return;
+    await gsr('adminAddChemical', name, unit);
+    renderAdminView();
+  });
+}
+
+/* ======= CHEMICAL RECIPE TAB ======= */
+function renderRecipeTab(data) {
+  const paramMap = {}; data.parameters.forEach(p => paramMap[p.ParameterID] = p.ParameterName);
+  const chemMap = {}; data.chemicals.forEach(c => chemMap[c.ChemicalID] = { name: c.ChemicalName, unit: c.Unit });
+
+  const rows = data.parameterChemicals.map(pc => {
+    const chem = chemMap[pc.ChemicalID] || { name: pc.ChemicalID, unit: '' };
+    return `
+    <tr id="recipe-row-${esc(pc.RowID)}">
+      <td class="rc-param">${esc(paramMap[pc.ParameterID] || pc.ParameterID)}</td>
+      <td class="rc-chem">${esc(chem.name)}</td>
+      <td class="rc-qty">${esc(pc.QtyPerTest)}</td>
+      <td class="rc-unit"><span style="color:var(--muted);font-style:italic">${esc(chem.unit)}</span></td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editRecipeRow('${esc(pc.RowID)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteRecipe('${esc(pc.RowID)}','${esc(chem.name)}')">Delete</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='recipe'?'active':''}" id="tab-recipe">
+      <div class="card">
+        <h2>Chemical Recipe per Parameter</h2>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:14px">
+          একটি parameter-এর test করতে কত পরিমাণ কোন chemical লাগবে তা এখানে define করুন।
+          একটি parameter-এ একাধিক chemical যোগ করা যাবে। Unit, 🧪 Master Chemical List থেকে automatically নেওয়া হবে।
+        </p>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>Parameter</label><select id="newRecipeParam">${parameterOptions(data.parameters, '')}</select></div>
+            <div class="col"><label>Chemical (from master list)</label><select id="newRecipeChem" onchange="onNewRecipeChemChange()">${chemicalOptions(data.chemicals, '')}</select></div>
+            <div class="col"><label>Qty per Test</label><input type="number" step="any" id="newRecipeQty" placeholder="e.g. 2"></div>
+            <div class="col">
+              <label>Unit <span style="font-weight:400;color:#9ca3af">(master থেকে)</span></label>
+              <input type="text" id="newRecipeUnit" readonly
+                style="background:#f1f5f9;color:var(--muted);cursor:not-allowed;border-style:dashed">
+            </div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addRecipeBtn">+ Add Recipe Row</button>
+            </div>
+          </div>
+        </div>
+        <table>
+          <thead><tr><th>Parameter</th><th>Chemical</th><th>Qty/Test</th><th>Unit (master)</th><th>Actions</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function onNewRecipeChemChange() {
+  const chemId = document.getElementById('newRecipeChem').value;
+  const chem = DB.chemicals.find(c => c.ChemicalID === chemId);
+  document.getElementById('newRecipeUnit').value = chem ? chem.Unit : '';
+}
+
+function editRecipeRow(rowId) {
+  const row = document.getElementById('recipe-row-' + rowId);
+  const pc = DB.parameterChemicals.find(x => x.RowID === rowId);
+  if (!row || !pc) return;
+  const chem = DB.chemicals.find(c => c.ChemicalID === pc.ChemicalID);
+  row.classList.add('editing');
+  row.querySelector('.rc-param').innerHTML = `<select id="er-param-${esc(rowId)}">${parameterOptions(DB.parameters, pc.ParameterID)}</select>`;
+  row.querySelector('.rc-chem').innerHTML = `<select id="er-chem-${esc(rowId)}" onchange="onEditRecipeChemChange('${esc(rowId)}')">${chemicalOptions(DB.chemicals, pc.ChemicalID)}</select>`;
+  row.querySelector('.rc-qty').innerHTML = `<input type="number" step="any" value="${esc(pc.QtyPerTest)}" id="er-qty-${esc(rowId)}" style="width:70px">`;
+  row.querySelector('.rc-unit').innerHTML = `<span id="er-unit-display-${esc(rowId)}" style="color:var(--muted);font-style:italic">${esc(chem ? chem.Unit : '')}</span>`;
+  row.querySelector('.td-actions').innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveRecipe('${esc(rowId)}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+function onEditRecipeChemChange(rowId) {
+  const chemId = document.getElementById('er-chem-' + rowId).value;
+  const chem = DB.chemicals.find(c => c.ChemicalID === chemId);
+  const display = document.getElementById('er-unit-display-' + rowId);
+  if (display) display.textContent = chem ? chem.Unit : '';
+}
+
+async function saveRecipe(rowId) {
+  const paramId = document.getElementById('er-param-' + rowId).value;
+  const chemId = document.getElementById('er-chem-' + rowId).value;
+  const qty = document.getElementById('er-qty-' + rowId).value;
+  if (!qty) return;
+  // Unit always comes from master chemical
+  const chem = DB.chemicals.find(c => c.ChemicalID === chemId);
+  const unit = chem ? chem.Unit : '';
+  await gsr('adminUpdateParameterChemical', rowId, paramId, chemId, qty, unit);
+  renderAdminView();
+}
+
+async function deleteRecipe(rowId, name) {
+  if (!confirmDelete(name + ' recipe row')) return;
+  await gsr('adminDeleteParameterChemical', rowId);
+  renderAdminView();
+}
+
+function bindRecipeTab(data) {
+  // auto-fill unit from first chemical in master list
+  const newChemSel = document.getElementById('newRecipeChem');
+  if (newChemSel && data.chemicals.length > 0) {
+    const firstChem = data.chemicals.find(c => c.ChemicalID === newChemSel.value);
+    if (firstChem) document.getElementById('newRecipeUnit').value = firstChem.Unit;
+  }
+
+  document.getElementById('addRecipeBtn').addEventListener('click', async () => {
+    const parameterId = document.getElementById('newRecipeParam').value;
+    const chemicalId = document.getElementById('newRecipeChem').value;
+    const qty = document.getElementById('newRecipeQty').value;
+    if (!chemicalId || !qty) return;
+    // Unit always from master chemical
+    const chem = DB.chemicals.find(c => c.ChemicalID === chemicalId);
+    const unit = chem ? chem.Unit : '';
+    await gsr('adminAddParameterChemical', parameterId, chemicalId, qty, unit);
+    renderAdminView();
+  });
+}
+
+/* ======= FISCAL YEARS TAB ======= */
+function renderFYTab(data) {
+  const rows = data.fiscalYears.map(f => `
+    <tr id="fy-row-${esc(f.FYID)}">
+      <td>${esc(f.FYID)}</td>
+      <td class="fy-label">${esc(f.FYLabel)}</td>
+      <td class="fy-active">${f.IsActive ? '<span class="badge walk-in">✅ Active</span>' : '<span class="badge" style="background:#f1f5f9;color:#6b7280">Inactive</span>'}</td>
+      <td><div class="td-actions">
+        <button class="btn-sm btn-edit" onclick="editFYRow('${esc(f.FYID)}')">Edit</button>
+        <button class="btn-sm btn-delete" onclick="deleteFY('${esc(f.FYID)}','${esc(f.FYLabel)}')">Delete</button>
+      </div></td>
+    </tr>`).join('');
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='fy'?'active':''}" id="tab-fy">
+      <div class="card">
+        <h2>Fiscal Years</h2>
+        <div class="add-form-box">
+          <div class="row">
+            <div class="col"><label>Label (e.g. 2026-2027)</label><input type="text" id="newFYLabel"></div>
+            <div class="col"><label>Active?</label><select id="newFYActive"><option value="false">No</option><option value="true">Yes</option></select></div>
+            <div class="col" style="display:flex;align-items:flex-end;padding-bottom:12px">
+              <button type="button" id="addFYBtn">+ Add Fiscal Year</button>
+            </div>
+          </div>
+        </div>
+        <table><thead><tr><th>ID</th><th>Label</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+    </div>`;
+}
+
+function editFYRow(id) {
+  const row = document.getElementById('fy-row-' + id);
+  const f = DB.fiscalYears.find(x => x.FYID === id);
+  if (!row || !f) return;
+  row.classList.add('editing');
+  row.querySelector('.fy-label').innerHTML = `<input type="text" value="${esc(f.FYLabel)}" id="ef-label-${esc(id)}">`;
+  row.querySelector('.fy-active').innerHTML = `<select id="ef-active-${esc(id)}"><option value="true" ${f.IsActive?'selected':''}>✅ Active</option><option value="false" ${!f.IsActive?'selected':''}>Inactive</option></select>`;
+  row.querySelector('.td-actions').innerHTML = `
+    <button class="btn-sm btn-save" onclick="saveFY('${esc(id)}')">Save</button>
+    <button class="btn-sm btn-cancel" onclick="renderAdminView()">Cancel</button>`;
+}
+
+async function saveFY(id) {
+  const label = document.getElementById('ef-label-' + id).value.trim();
+  const isActive = document.getElementById('ef-active-' + id).value === 'true';
+  if (!label) return;
+  await gsr('adminUpdateFiscalYear', id, label, isActive);
+  renderAdminView();
+}
+
+async function deleteFY(id, name) {
+  if (!confirmDelete(name)) return;
+  await gsr('adminDeleteFiscalYear', id);
+  renderAdminView();
+}
+
+function bindFYTab(data) {
+  document.getElementById('addFYBtn').addEventListener('click', async () => {
+    const label = document.getElementById('newFYLabel').value.trim();
+    const active = document.getElementById('newFYActive').value === 'true';
+    if (!label) return;
+    await gsr('adminAddFiscalYear', label, active);
+    renderAdminView();
+  });
+}
+
+/* ======= BACKUP & EXCEL SETUP TAB ======= */
+function renderBackupTab(data) {
+  return `
+    <div class="tab-panel ${ADMIN_ACTIVE_TAB==='backup'?'active':''}" id="tab-backup">
+      <div class="card">
+        <h2>💾 Excel Setup, Import / Export & Backup</h2>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:18px">
+          একটি মাত্র এক্সেল (.xlsx) ফাইলের মাধ্যমে পুরো সিস্টেমের জোন, জেলা, ইউজার, প্যারামিটার, কেমিক্যাল, রেসিপি, প্রজেক্ট ইত্যাদি সম্পূর্ণ সেটআপ করা যায়।
+          নিচের অপশনগুলো ব্যবহার করে টেমপ্লেট ডাউনলোড, এক্সপোর্ট অথবা এক্সেল ফাইল আপলোড করে ফুল সেটআপ সম্পন্ন করুন।
+        </p>
+
+        <!-- SECTION 1: TEMPLATE & EXPORT -->
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:18px">
+          <h3 style="margin-top:0;color:var(--primary-dark)">1. 📥 Download Excel Setup Template & Export</h3>
+          <p style="font-size:13px;color:#475569;margin-bottom:14px">
+            সঠিক কলাম ফরম্যাট বজায় রেখে ডেটা পূরণ করতে নিচের টেমপ্লেটটি ডাউনলোড করুন। এতে প্রতিটি শিট (Zones, Districts, Users, Parameters, Chemicals, Recipes, Projects, FiscalYears) সাজানো রয়েছে।
+          </p>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <button type="button" class="secondary" onclick="downloadSetupTemplateExcel()" style="display:inline-flex;align-items:center;gap:6px">
+              📥 Download Setup Template (.xlsx)
+            </button>
+            <button type="button" class="ghost" onclick="exportFullDatabaseExcel()" style="display:inline-flex;align-items:center;gap:6px">
+              📤 Export Current Full Database (.xlsx)
+            </button>
+          </div>
+        </div>
+
+        <!-- SECTION 2: IMPORT EXCEL -->
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin-bottom:18px">
+          <h3 style="margin-top:0;color:#166534">2. 🚀 Upload & Apply Full Setup from Excel (.xlsx)</h3>
+          <p style="font-size:13px;color:#475569;margin-bottom:14px">
+            আপনার পূরণকৃত টেমপ্লেট বা ডেটাবেজ এক্সেল ফাইলটি নির্বাচন করে <strong>Process & Load</strong> বাটনে ক্লিক করুন।
+          </p>
+          <div style="margin-bottom:12px">
+            <input type="file" id="excelUploadFileInput" accept=".xlsx, .xls" style="background:#fff;padding:8px;border:1px solid #cbd5e1;border-radius:6px;max-width:380px">
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px">Import Mode (ইমপোর্ট পদ্ধতি):</label>
+            <div style="display:flex;gap:20px;flex-wrap:wrap">
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500">
+                <input type="radio" name="excelImportMode" value="replace" checked style="margin:0;width:auto">
+                <strong>Replace All Setup Data</strong> (সম্পূর্ণ নতুন করে ফ্রেশ সেটআপ লোড হবে)
+              </label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500">
+                <input type="radio" name="excelImportMode" value="merge" style="margin:0;width:auto">
+                <strong>Merge / Update</strong> (বিদ্যমান ডেটার সাথে নতুন রেকর্ড যুক্ত হবে)
+              </label>
+            </div>
+          </div>
+          <button type="button" id="executeExcelImportBtn" style="background:#16a34a;color:#fff;padding:10px 22px">
+            ⚡ Process & Load Setup from Excel
+          </button>
+        </div>
+
+        <!-- SECTION 3: OFFLINE JSON BACKUP -->
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px">
+          <h3 style="margin-top:0;color:#475569">3. 💾 Direct JSON Backup & Restore (100% Offline)</h3>
+          <p style="font-size:13px;color:#64748b;margin-bottom:12px">
+            কোনো লাইব্রেরি বা ইন্টারনেট ছাড়াই সরাসরি সম্পূর্ণ ডেটাবেজ ব্যাকআপ ও রিস্টোর করার অপশন।
+          </p>
+          <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+            <button type="button" class="ghost btn-sm" onclick="exportDatabaseJSON()">
+              📥 Download JSON Backup
+            </button>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="file" id="jsonUploadFileInput" accept=".json" style="margin-bottom:0;padding:4px 8px;font-size:12px;width:240px">
+              <button type="button" class="ghost btn-sm" onclick="triggerJSONRestore()">Restore JSON</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `;
+}
+
+function downloadSetupTemplateExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library (SheetJS) is loading or unavailable. Please verify internet connection or use JSON backup.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+
+  // 1. Zones
+  const zonesData = [
+    { ZoneID: 'Z1', ZoneName: 'Zone 1 (Dhaka)' },
+    { ZoneID: 'Z2', ZoneName: 'Zone 2 (Chittagong)' },
+    { ZoneID: 'Z3', ZoneName: 'Zone 3 (Rajshahi)' }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(zonesData), 'Zones');
+
+  // 2. Districts
+  const districtsData = [
+    { DistrictID: 'D1', DistrictName: 'Dhaka', ZoneID: 'Z1' },
+    { DistrictID: 'D2', DistrictName: 'Gazipur', ZoneID: 'Z1' },
+    { DistrictID: 'D3', DistrictName: 'Chittagong', ZoneID: 'Z2' },
+    { DistrictID: 'D4', DistrictName: 'Coxs Bazar', ZoneID: 'Z2' },
+    { DistrictID: 'D5', DistrictName: 'Rajshahi', ZoneID: 'Z3' }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(districtsData), 'Districts');
+
+  // 3. Users
+  const usersData = [
+    { Email: 'exen.dhaka@dphe.gov.bd', Name: 'Exen - Dhaka', Role: 'EXEN', DistrictID: 'D1', ZoneID: '', Active: true },
+    { Email: 'chemist.z1@dphe.gov.bd', Name: 'Sr. Chemist - Zone 1', Role: 'CHEMIST', DistrictID: '', ZoneID: 'Z1', Active: true },
+    { Email: 'admin@dphe.gov.bd', Name: 'System Admin', Role: 'ADMIN', DistrictID: '', ZoneID: '', Active: true }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(usersData), 'Users');
+
+  // 4. Parameters
+  const paramsData = [
+    { ParameterID: 'P01', ParameterName: 'Arsenic (As)', Unit: 'mg/L', Category: 'Chemical' },
+    { ParameterID: 'P02', ParameterName: 'Iron (Fe)', Unit: 'mg/L', Category: 'Chemical' },
+    { ParameterID: 'P03', ParameterName: 'Manganese (Mn)', Unit: 'mg/L', Category: 'Chemical' },
+    { ParameterID: 'P04', ParameterName: 'Chloride (Cl-)', Unit: 'mg/L', Category: 'Chemical' },
+    { ParameterID: 'P05', ParameterName: 'pH', Unit: 'pH units', Category: 'Physical' }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(paramsData), 'Parameters');
+
+  // 5. Chemicals
+  const chemsData = [
+    { ChemicalID: 'CH01', ChemicalName: 'Arsenic reagent kit', Unit: 'kit' },
+    { ChemicalID: 'CH02', ChemicalName: 'Hydrochloric acid (HCl) conc.', Unit: 'mL' },
+    { ChemicalID: 'CH03', ChemicalName: '1,10-Phenanthroline solution', Unit: 'mL' },
+    { ChemicalID: 'CH04', ChemicalName: 'Silver nitrate solution (0.0141N)', Unit: 'mL' }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(chemsData), 'Chemicals');
+
+  // 6. ChemicalRecipes
+  const recipesData = [
+    { ParameterID: 'P01', ChemicalID: 'CH01', QtyPerTest: 1 },
+    { ParameterID: 'P02', ChemicalID: 'CH02', QtyPerTest: 2 },
+    { ParameterID: 'P02', ChemicalID: 'CH03', QtyPerTest: 1 },
+    { ParameterID: 'P04', ChemicalID: 'CH04', QtyPerTest: 3 }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(recipesData), 'ChemicalRecipes');
+
+  // 7. Projects
+  const projectsData = [
+    { ProjectID: 'PRJ01', ProjectName: 'National Safe Water Supply Project', DistrictScope: 'ALL', FYID: 'FY2526' },
+    { ProjectID: 'PRJ02', ProjectName: 'Arsenic Mitigation Project', DistrictScope: 'D1,D2', FYID: 'FY2526' }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(projectsData), 'Projects');
+
+  // 8. FiscalYears
+  const fyData = [
+    { FYID: 'FY2425', FYLabel: '2024-2025', IsActive: false },
+    { FYID: 'FY2526', FYLabel: '2025-2026', IsActive: true },
+    { FYID: 'FY2627', FYLabel: '2026-2027', IsActive: false }
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(fyData), 'FiscalYears');
+
+  XLSX.writeFile(wb, 'DPHE_Setup_Template.xlsx');
+}
+
+function exportFullDatabaseExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library (SheetJS) is loading or unavailable. Please use JSON export.');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.zones || []), 'Zones');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.districts || []), 'Districts');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.users || []), 'Users');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.parameters || []), 'Parameters');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.chemicals || []), 'Chemicals');
+
+  const recipeExport = (DB.parameterChemicals || []).map(r => ({
+    RowID: r.RowID,
+    ParameterID: r.ParameterID,
+    ChemicalID: r.ChemicalID,
+    QtyPerTest: r.QtyPerTest
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(recipeExport), 'ChemicalRecipes');
+
+  const projectExport = (DB.projects || []).map(p => ({
+    ProjectID: p.ProjectID,
+    ProjectName: p.ProjectName,
+    DistrictScope: (p.IsAllDistricts || p.DistrictID === 'ALL') ? 'ALL' : (Array.isArray(p.DistrictIDs) ? p.DistrictIDs.join(',') : p.DistrictID),
+    FYID: p.FYID,
+    CreatedAt: p.CreatedAt
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(projectExport), 'Projects');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.fiscalYears || []), 'FiscalYears');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(DB.sampleEntries || []), 'SampleEntries');
+
+  XLSX.writeFile(wb, `DPHE_Full_Backup_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+function processExcelSetupUpload() {
+  const fileInput = document.getElementById('excelUploadFileInput');
+  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+    alert('অনুগ্রহ করে প্রথমে একটি এক্সেল (.xlsx / .xls) ফাইল নির্বাচন করুন।');
+    return;
+  }
+  const file = fileInput.files[0];
+  const modeEl = document.querySelector('input[name="excelImportMode"]:checked');
+  const mode = modeEl ? modeEl.value : 'replace';
+
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library (SheetJS) is unavailable. Please use JSON restore or verify your internet connection.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const counts = [];
+
+      function getSheetRows(sheetName) {
+        const ws = workbook.Sheets[sheetName];
+        if (!ws) return null;
+        return XLSX.utils.sheet_to_json(ws);
+      }
+
+      const isReplace = mode === 'replace';
+
+      // 1. Zones
+      const zonesRows = getSheetRows('Zones');
+      if (zonesRows && zonesRows.length > 0) {
+        const cleaned = zonesRows.map(r => ({ ZoneID: String(r.ZoneID || genId('Z')).trim(), ZoneName: String(r.ZoneName || '').trim() }));
+        if (isReplace) DB.zones = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.zones.findIndex(z => z.ZoneID === item.ZoneID);
+            if (idx >= 0) DB.zones[idx] = item; else DB.zones.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Zones`);
+      }
+
+      // 2. Districts
+      const distRows = getSheetRows('Districts');
+      if (distRows && distRows.length > 0) {
+        const cleaned = distRows.map(r => ({ DistrictID: String(r.DistrictID || genId('D')).trim(), DistrictName: String(r.DistrictName || '').trim(), ZoneID: String(r.ZoneID || '').trim() }));
+        if (isReplace) DB.districts = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.districts.findIndex(d => d.DistrictID === item.DistrictID);
+            if (idx >= 0) DB.districts[idx] = item; else DB.districts.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Districts`);
+      }
+
+      // 3. Users
+      const usersRows = getSheetRows('Users');
+      if (usersRows && usersRows.length > 0) {
+        const cleaned = usersRows.map(r => ({
+          Email: String(r.Email || '').trim().toLowerCase(),
+          Name: String(r.Name || '').trim(),
+          Role: String(r.Role || 'EXEN').trim().toUpperCase(),
+          DistrictID: String(r.DistrictID || '').trim(),
+          ZoneID: String(r.ZoneID || '').trim(),
+          Active: r.Active === true || String(r.Active).toLowerCase() === 'true' || r.Active === 1
+        }));
+        if (isReplace) DB.users = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.users.findIndex(u => u.Email === item.Email);
+            if (idx >= 0) DB.users[idx] = item; else DB.users.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Users`);
+      }
+
+      // 4. Parameters
+      const paramRows = getSheetRows('Parameters');
+      if (paramRows && paramRows.length > 0) {
+        const cleaned = paramRows.map(r => ({
+          ParameterID: String(r.ParameterID || genId('P')).trim(),
+          ParameterName: String(r.ParameterName || '').trim(),
+          Unit: String(r.Unit || '').trim(),
+          Category: String(r.Category || 'Chemical').trim()
+        }));
+        if (isReplace) DB.parameters = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.parameters.findIndex(p => p.ParameterID === item.ParameterID);
+            if (idx >= 0) DB.parameters[idx] = item; else DB.parameters.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Parameters`);
+      }
+
+      // 5. Chemicals
+      const chemRows = getSheetRows('Chemicals');
+      if (chemRows && chemRows.length > 0) {
+        const cleaned = chemRows.map(r => ({
+          ChemicalID: String(r.ChemicalID || genId('CH')).trim(),
+          ChemicalName: String(r.ChemicalName || '').trim(),
+          Unit: String(r.Unit || '').trim()
+        }));
+        if (isReplace) DB.chemicals = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.chemicals.findIndex(c => c.ChemicalID === item.ChemicalID);
+            if (idx >= 0) DB.chemicals[idx] = item; else DB.chemicals.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Chemicals`);
+      }
+
+      // 6. ChemicalRecipes
+      const recipeRows = getSheetRows('ChemicalRecipes') || getSheetRows('Recipes');
+      if (recipeRows && recipeRows.length > 0) {
+        const chemMap = {}; DB.chemicals.forEach(c => chemMap[c.ChemicalID] = c.Unit);
+        const cleaned = recipeRows.map(r => {
+          const cId = String(r.ChemicalID || '').trim();
+          return {
+            RowID: String(r.RowID || genId('PC')).trim(),
+            ParameterID: String(r.ParameterID || '').trim(),
+            ChemicalID: cId,
+            QtyPerTest: Number(r.QtyPerTest) || 0,
+            Unit: chemMap[cId] || ''
+          };
+        });
+        if (isReplace) DB.parameterChemicals = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.parameterChemicals.findIndex(pc => pc.RowID === item.RowID);
+            if (idx >= 0) DB.parameterChemicals[idx] = item; else DB.parameterChemicals.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Recipes`);
+      }
+
+      // 7. Projects
+      const projRows = getSheetRows('Projects');
+      if (projRows && projRows.length > 0) {
+        const cleaned = projRows.map(r => {
+          const scope = String(r.DistrictScope || r.DistrictIDs || r.DistrictID || 'ALL').trim();
+          const isAll = scope.toUpperCase() === 'ALL';
+          const distList = isAll ? ['ALL'] : scope.split(',').map(s => s.trim()).filter(Boolean);
+          return {
+            ProjectID: String(r.ProjectID || genId('PRJ')).trim(),
+            ProjectName: String(r.ProjectName || '').trim(),
+            DistrictIDs: distList,
+            DistrictID: isAll ? 'ALL' : distList.join(','),
+            IsAllDistricts: isAll,
+            FYID: String(r.FYID || '').trim(),
+            CreatedAt: String(r.CreatedAt || nowStr()).trim()
+          };
+        });
+        if (isReplace) DB.projects = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.projects.findIndex(p => p.ProjectID === item.ProjectID);
+            if (idx >= 0) DB.projects[idx] = item; else DB.projects.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Projects`);
+      }
+
+      // 8. FiscalYears
+      const fyRows = getSheetRows('FiscalYears');
+      if (fyRows && fyRows.length > 0) {
+        const cleaned = fyRows.map(r => ({
+          FYID: String(r.FYID || genId('FY')).trim(),
+          FYLabel: String(r.FYLabel || '').trim(),
+          IsActive: r.IsActive === true || String(r.IsActive).toLowerCase() === 'true' || r.IsActive === 1
+        }));
+        if (isReplace) DB.fiscalYears = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.fiscalYears.findIndex(f => f.FYID === item.FYID);
+            if (idx >= 0) DB.fiscalYears[idx] = item; else DB.fiscalYears.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Fiscal Years`);
+      }
+
+      // 9. SampleEntries (if present in full backup)
+      const sampleRows = getSheetRows('SampleEntries');
+      if (sampleRows && sampleRows.length > 0) {
+        const cleaned = sampleRows.map(r => ({
+          EntryID: String(r.EntryID || genId('SE')).trim(),
+          FYID: String(r.FYID || '').trim(),
+          DistrictID: String(r.DistrictID || '').trim(),
+          ProjectID: String(r.ProjectID || '').trim(),
+          ExpectedSamples: Number(r.ExpectedSamples) || 0,
+          ParameterIDs: String(r.ParameterIDs || '').trim(),
+          Remarks: String(r.Remarks || '').trim(),
+          EnteredBy: String(r.EnteredBy || '').trim(),
+          EnteredAt: String(r.EnteredAt || nowStr()).trim()
+        }));
+        if (isReplace) DB.sampleEntries = cleaned;
+        else {
+          cleaned.forEach(item => {
+            const idx = DB.sampleEntries.findIndex(se => se.EntryID === item.EntryID);
+            if (idx >= 0) DB.sampleEntries[idx] = item; else DB.sampleEntries.push(item);
+          });
+        }
+        counts.push(`${cleaned.length}টি Sample Entries`);
+      }
+
+      saveDB(DB);
+      renderAdminView();
+      alert('✓ এক্সেল সেটআপ সফলভাবে লোড হয়েছে!\n\nলোডেড রেকর্ডসমূহ:\n• ' + (counts.join('\n• ') || 'কোনো ভ্যালিড শিট পাওয়া যায়নি।'));
+    } catch (err) {
+      alert('Error reading Excel file: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function exportDatabaseJSON() {
+  const blob = new Blob([JSON.stringify(DB, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `DPHE_Database_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+}
+
+function triggerJSONRestore() {
+  const fileInput = document.getElementById('jsonUploadFileInput');
+  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+    alert('অনুগ্রহ করে একটি JSON ব্যাকআপ ফাইল নির্বাচন করুন।');
+    return;
+  }
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      if (!parsed.zones || !parsed.districts) throw new Error('Invalid DPHE database JSON format');
+      DB = parsed;
+      saveDB(DB);
+      renderAdminView();
+      alert('✓ JSON ব্যাকআপ সফলভাবে রিস্টোর হয়েছে!');
+    } catch(err) {
+      alert('Error importing JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function bindBackupTab(data) {
+  const btn = document.getElementById('executeExcelImportBtn');
+  if (btn) btn.addEventListener('click', processExcelSetupUpload);
+}
+
+
+
+/* ============ PRODUCTION BOOT ============ */
+window.addEventListener('DOMContentLoaded', () => {
+  if (!CURRENT_USER) {
+    handleLogout();
+    return;
+  }
+  document.getElementById('userNameDisplay').textContent = CURRENT_USER.name || CURRENT_USER.email;
+  document.getElementById('roleBadgeDisplay').textContent = CURRENT_USER.role;
+  ['exenView', 'chemistView', 'adminView'].forEach(id => document.getElementById(id).style.display = 'none');
+  if (CURRENT_USER.role === 'EXEN') {
+    document.getElementById('exenView').style.display = 'block';
+    renderExenView();
+  } else if (CURRENT_USER.role === 'CHEMIST') {
+    document.getElementById('chemistView').style.display = 'block';
+    renderChemistView();
+  } else if (CURRENT_USER.role === 'ADMIN') {
+    document.getElementById('adminView').style.display = 'block';
+    renderAdminView();
+  }
+});
+</script>
+</body>
+</html>
