@@ -242,48 +242,53 @@ async function renderExenView() {
   const el = document.getElementById('exenView');
   el.innerHTML = `<div class="loading">Loading...</div>`;
 
-  const [fiscalYears, districts, parameters] = await Promise.all([
-    gsr('getFiscalYears'), gsr('getDistricts'), gsr('getParameters')
-  ]);
+  try {
+    const [fiscalYears, districts, parameters] = await Promise.all([
+      gsr('getFiscalYears'), gsr('getDistricts'), gsr('getParameters')
+    ]);
 
-  const myDistrict = districts.find(d => d.DistrictID === CURRENT_USER.districtId);
-  EXEN_STATE.districtId = CURRENT_USER.districtId;
-  EXEN_STATE.districtName = myDistrict ? myDistrict.DistrictName : CURRENT_USER.districtId;
-  EXEN_STATE.parameters = parameters;
+    const myDistrict = districts.find(d => d.DistrictID === CURRENT_USER.districtId);
+    EXEN_STATE.districtId = CURRENT_USER.districtId;
+    EXEN_STATE.districtName = myDistrict ? myDistrict.DistrictName : CURRENT_USER.districtId;
+    EXEN_STATE.parameters = parameters;
 
-  const activeFY = fiscalYears.find(f => f.IsActive) || fiscalYears[0];
-  EXEN_STATE.fyId = activeFY ? activeFY.FYID : null;
+    const activeFY = fiscalYears.find(f => f.IsActive) || fiscalYears[0];
+    EXEN_STATE.fyId = activeFY ? activeFY.FYID : null;
 
-  el.innerHTML = `
-    <div class="card">
-      <h2>District: ${esc(EXEN_STATE.districtName)}</h2>
-      <div class="row">
-        <div class="col"><label>Fiscal Year</label><select id="exenFY">${fyOptions(fiscalYears, EXEN_STATE.fyId)}</select></div>
+    el.innerHTML = `
+      <div class="card">
+        <h2>District: ${esc(EXEN_STATE.districtName)}</h2>
+        <div class="row">
+          <div class="col"><label>Fiscal Year</label><select id="exenFY">${fyOptions(fiscalYears, EXEN_STATE.fyId)}</select></div>
+        </div>
       </div>
-    </div>
-    <div class="card" id="exenSummaryCard"><div class="loading">Loading summary...</div></div>
-    <div class="card">
-      <h2>Add Sample Requirement (Project-wise)</h2>
-      <p style="font-size:13px;color:#6b7280;margin-bottom:10px">📋 Projects are created by the Admin. Select the project assigned to your district below.</p>
-      <div class="row">
-        <div class="col"><label>Select Project</label><select id="exenProjectSelect"><option value="">-- Select project --</option></select></div>
+      <div class="card" id="exenSummaryCard"><div class="loading">Loading summary...</div></div>
+      <div class="card">
+        <h2>Add Sample Requirement (Project-wise)</h2>
+        <p style="font-size:13px;color:#6b7280;margin-bottom:10px">📋 Projects are created by the Admin. Select the project assigned to your district below.</p>
+        <div class="row">
+          <div class="col"><label>Select Project</label><select id="exenProjectSelect"><option value="">-- Select project --</option></select></div>
+        </div>
+        <h3>Parameters to test per sample</h3>
+        ${paramCheckboxList(parameters, 'exen')}
+        <div class="row">
+          <div class="col"><label>Expected Number of Samples (this fiscal year)</label><input type="number" id="exenExpectedSamples" min="0" placeholder="e.g. 250"></div>
+        </div>
+        <label>Remarks (optional)</label><textarea id="exenRemarks"></textarea>
+        <button type="button" id="exenSubmitBtn">Save Requirement</button>
       </div>
-      <h3>Parameters to test per sample</h3>
-      ${paramCheckboxList(parameters, 'exen')}
-      <div class="row">
-        <div class="col"><label>Expected Number of Samples (this fiscal year)</label><input type="number" id="exenExpectedSamples" min="0" placeholder="e.g. 250"></div>
-      </div>
-      <label>Remarks (optional)</label><textarea id="exenRemarks"></textarea>
-      <button type="button" id="exenSubmitBtn">Save Requirement</button>
-    </div>
-    <div class="card"><h2>Submitted Entries</h2><div id="exenEntriesTable"><div class="loading">Loading...</div></div></div>
-  `;
+      <div class="card"><h2>Submitted Entries</h2><div id="exenEntriesTable"><div class="loading">Loading...</div></div></div>
+    `;
 
-  document.getElementById('exenFY').addEventListener('change', e => { EXEN_STATE.fyId = e.target.value; loadExenProjects(); refreshExenDashboard(); });
-  document.getElementById('exenSubmitBtn').addEventListener('click', exenSubmitEntry);
+    document.getElementById('exenFY').addEventListener('change', e => { EXEN_STATE.fyId = e.target.value; loadExenProjects(); refreshExenDashboard(); });
+    document.getElementById('exenSubmitBtn').addEventListener('click', exenSubmitEntry);
 
-  await loadExenProjects();
-  await refreshExenDashboard();
+    await loadExenProjects();
+    await refreshExenDashboard();
+  } catch (err) {
+    el.innerHTML = `<div class="msg error">Failed to load: ${esc(err && err.message ? err.message : String(err))}</div>
+      <button type="button" onclick="renderExenView()">Retry</button>`;
+  }
 }
 
 async function loadExenProjects() {
@@ -464,6 +469,7 @@ async function renderChemistView() {
   const el = document.getElementById('chemistView');
   el.innerHTML = `<div class="loading">Loading...</div>`;
 
+  try {
   const [fiscalYears, zones, parameters] = await Promise.all([gsr('getFiscalYears'), gsr('getZones'), gsr('getParameters')]);
   const myZone = zones.find(z => z.ZoneID === CURRENT_USER.zoneId) || zones[0];
   CHEMIST_STATE.zoneId = (myZone ? myZone.ZoneID : CURRENT_USER.zoneId) || (zones[0] ? zones[0].ZoneID : 'Z1');
@@ -518,6 +524,10 @@ async function renderChemistView() {
   });
 
   await refreshChemistDashboard();
+  } catch (err) {
+    el.innerHTML = `<div class="msg error">Failed to load: ${esc(err && err.message ? err.message : String(err))}</div>
+      <button type="button" onclick="renderChemistView()">Retry</button>`;
+  }
 }
 
 function clientBadge(type) {
@@ -782,10 +792,19 @@ let ADMIN_ACTIVE_TAB = 'zones';
 
 async function renderAdminView(forceRefresh) {
   const el = document.getElementById('adminView');
-  if (forceRefresh || !window.DB || !window.DB.zones) {
-    el.innerHTML = `<div class="loading">Loading...</div>`;
-    const data = await gsr('getAdminBootstrap');
-    window.DB = data;
+  let data;
+  try {
+    if (forceRefresh || !window.DB || !window.DB.zones) {
+      el.innerHTML = `<div class="loading">Loading...</div>`;
+      data = await gsr('getAdminBootstrap');
+      window.DB = data;
+    } else {
+      data = window.DB;
+    }
+  } catch (err) {
+    el.innerHTML = `<div class="msg error">Failed to load: ${esc(err && err.message ? err.message : String(err))}</div>
+      <button type="button" onclick="renderAdminView(true)">Retry</button>`;
+    return;
   }
 
   el.innerHTML = `
@@ -2172,6 +2191,30 @@ function exportFullDatabaseExcel() {
   XLSX.writeFile(wb, `DPHE_Full_Backup_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
+// Creates a sequential ID generator like the backend's nextSequentialId:
+// scans `existingItems` for the highest number already used with `prefix`
+// on `idField`, then returns a function that hands out prefix+N, prefix+N+1,
+// ... zero-padded to padLength, for each row in this import batch that's
+// missing an ID. Used by processExcelSetupUpload() below.
+function makeIdAssigner(existingItems, idField, prefix, padLength) {
+  padLength = padLength || 2;
+  let maxNum = 0;
+  (existingItems || []).forEach(item => {
+    const val = String((item && item[idField]) || '');
+    if (val.indexOf(prefix) === 0) {
+      const num = parseInt(val.substring(prefix.length), 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  let counter = maxNum;
+  return function() {
+    counter += 1;
+    let numStr = String(counter);
+    while (numStr.length < padLength) numStr = '0' + numStr;
+    return prefix + numStr;
+  };
+}
+
 function processExcelSetupUpload() {
   const fileInput = document.getElementById('excelUploadFileInput');
   if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
@@ -2205,7 +2248,8 @@ function processExcelSetupUpload() {
       // 1. Zones
       const zonesRows = getSheetRows('Zones');
       if (zonesRows && zonesRows.length > 0) {
-        const cleaned = zonesRows.map(r => ({ ZoneID: String(r.ZoneID || genId('Z')).trim(), ZoneName: String(r.ZoneName || '').trim() }));
+        const nextZoneId = makeIdAssigner(DB.zones, 'ZoneID', 'Z', 2);
+        const cleaned = zonesRows.map(r => ({ ZoneID: String(r.ZoneID || nextZoneId()).trim(), ZoneName: String(r.ZoneName || '').trim() }));
         if (isReplace) DB.zones = cleaned;
         else {
           cleaned.forEach(item => {
@@ -2219,7 +2263,8 @@ function processExcelSetupUpload() {
       // 2. Districts
       const distRows = getSheetRows('Districts');
       if (distRows && distRows.length > 0) {
-        const cleaned = distRows.map(r => ({ DistrictID: String(r.DistrictID || genId('D')).trim(), DistrictName: String(r.DistrictName || '').trim(), ZoneID: String(r.ZoneID || '').trim() }));
+        const nextDistrictId = makeIdAssigner(DB.districts, 'DistrictID', 'D', 2);
+        const cleaned = distRows.map(r => ({ DistrictID: String(r.DistrictID || nextDistrictId()).trim(), DistrictName: String(r.DistrictName || '').trim(), ZoneID: String(r.ZoneID || '').trim() }));
         if (isReplace) DB.districts = cleaned;
         else {
           cleaned.forEach(item => {
@@ -2254,8 +2299,9 @@ function processExcelSetupUpload() {
       // 4. Parameters
       const paramRows = getSheetRows('Parameters');
       if (paramRows && paramRows.length > 0) {
+        const nextParamId = makeIdAssigner(DB.parameters, 'ParameterID', 'P', 2);
         const cleaned = paramRows.map(r => ({
-          ParameterID: String(r.ParameterID || genId('P')).trim(),
+          ParameterID: String(r.ParameterID || nextParamId()).trim(),
           ParameterName: String(r.ParameterName || '').trim(),
           Unit: String(r.Unit || '').trim(),
           Category: String(r.Category || 'Chemical').trim()
@@ -2273,8 +2319,9 @@ function processExcelSetupUpload() {
       // 5. Chemicals
       const chemRows = getSheetRows('Chemicals');
       if (chemRows && chemRows.length > 0) {
+        const nextChemId = makeIdAssigner(DB.chemicals, 'ChemicalID', 'CH', 2);
         const cleaned = chemRows.map(r => ({
-          ChemicalID: String(r.ChemicalID || genId('CH')).trim(),
+          ChemicalID: String(r.ChemicalID || nextChemId()).trim(),
           ChemicalName: String(r.ChemicalName || '').trim(),
           Unit: String(r.Unit || '').trim()
         }));
@@ -2292,10 +2339,11 @@ function processExcelSetupUpload() {
       const recipeRows = getSheetRows('ChemicalRecipes') || getSheetRows('Recipes');
       if (recipeRows && recipeRows.length > 0) {
         const chemMap = {}; DB.chemicals.forEach(c => chemMap[c.ChemicalID] = c.Unit);
+        const nextRecipeRowId = makeIdAssigner(DB.parameterChemicals, 'RowID', 'PC', 3);
         const cleaned = recipeRows.map(r => {
           const cId = String(r.ChemicalID || '').trim();
           return {
-            RowID: String(r.RowID || genId('PC')).trim(),
+            RowID: String(r.RowID || nextRecipeRowId()).trim(),
             ParameterID: String(r.ParameterID || '').trim(),
             ChemicalID: cId,
             QtyPerTest: Number(r.QtyPerTest) || 0,
@@ -2315,12 +2363,13 @@ function processExcelSetupUpload() {
       // 7. Projects
       const projRows = getSheetRows('Projects');
       if (projRows && projRows.length > 0) {
+        const nextProjectId = makeIdAssigner(DB.projects, 'ProjectID', 'PRJ', 3);
         const cleaned = projRows.map(r => {
           const scope = String(r.DistrictScope || r.DistrictIDs || r.DistrictID || 'ALL').trim();
           const isAll = scope.toUpperCase() === 'ALL';
           const distList = isAll ? ['ALL'] : scope.split(',').map(s => s.trim()).filter(Boolean);
           return {
-            ProjectID: String(r.ProjectID || genId('PRJ')).trim(),
+            ProjectID: String(r.ProjectID || nextProjectId()).trim(),
             ProjectName: String(r.ProjectName || '').trim(),
             DistrictIDs: distList,
             DistrictID: isAll ? 'ALL' : distList.join(','),
@@ -2342,8 +2391,9 @@ function processExcelSetupUpload() {
       // 8. FiscalYears
       const fyRows = getSheetRows('FiscalYears');
       if (fyRows && fyRows.length > 0) {
+        const nextFyId = makeIdAssigner(DB.fiscalYears, 'FYID', 'FY', 2);
         const cleaned = fyRows.map(r => ({
-          FYID: String(r.FYID || genId('FY')).trim(),
+          FYID: String(r.FYID || nextFyId()).trim(),
           FYLabel: String(r.FYLabel || '').trim(),
           IsActive: r.IsActive === true || String(r.IsActive).toLowerCase() === 'true' || r.IsActive === 1
         }));
@@ -2360,8 +2410,9 @@ function processExcelSetupUpload() {
       // 9. SampleEntries (if present in full backup)
       const sampleRows = getSheetRows('SampleEntries');
       if (sampleRows && sampleRows.length > 0) {
+        const nextEntryId = makeIdAssigner(DB.sampleEntries, 'EntryID', 'SE', 4);
         const cleaned = sampleRows.map(r => ({
-          EntryID: String(r.EntryID || genId('SE')).trim(),
+          EntryID: String(r.EntryID || nextEntryId()).trim(),
           FYID: String(r.FYID || '').trim(),
           DistrictID: String(r.DistrictID || '').trim(),
           ProjectID: String(r.ProjectID || '').trim(),
