@@ -78,6 +78,31 @@ if (!SESSION_TOKEN || !CURRENT_USER) {
   window.location.href = 'index.html';
 }
 
+// -------------------------------------------------------------
+// Global safety net: if ANY promise rejects without being caught
+// anywhere in this app, or a plain script error is thrown, show a
+// visible banner instead of silently leaving a "Loading..." state
+// on screen forever. This is a last line of defense on top of the
+// per-view try/catch blocks below.
+// -------------------------------------------------------------
+function showGlobalErrorBanner(message) {
+  var existing = document.getElementById('globalErrorBanner');
+  if (existing) existing.remove();
+  var banner = document.createElement('div');
+  banner.id = 'globalErrorBanner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#fef2f2;color:#991b1b;border-bottom:2px solid #fca5a5;padding:10px 16px;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:12px;';
+  banner.innerHTML = '<span>⚠️ Something went wrong: ' + String(message).replace(/[&<>"\']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}) +
+    '</span><button type="button" style="background:#991b1b;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px" onclick="document.getElementById(\'globalErrorBanner\').remove()">Dismiss</button>';
+  document.body.prepend(banner);
+}
+window.addEventListener('unhandledrejection', function(event) {
+  var msg = (event.reason && event.reason.message) ? event.reason.message : String(event.reason);
+  showGlobalErrorBanner(msg);
+});
+window.addEventListener('error', function(event) {
+  showGlobalErrorBanner(event.message || 'Unknown script error.');
+});
+
 // Global DB cache for UI tab navigation
 var DB = {
   zones: [], districts: [], users: [], parameters: [], chemicals: [],
@@ -280,7 +305,15 @@ async function renderExenView() {
       <div class="card"><h2>Submitted Entries</h2><div id="exenEntriesTable"><div class="loading">Loading...</div></div></div>
     `;
 
-    document.getElementById('exenFY').addEventListener('change', e => { EXEN_STATE.fyId = e.target.value; loadExenProjects(); refreshExenDashboard(); });
+    document.getElementById('exenFY').addEventListener('change', async e => {
+      EXEN_STATE.fyId = e.target.value;
+      try {
+        await loadExenProjects();
+        await refreshExenDashboard();
+      } catch (err) {
+        alert('Error loading data: ' + (err && err.message ? err.message : err));
+      }
+    });
     document.getElementById('exenSubmitBtn').addEventListener('click', exenSubmitEntry);
 
     await loadExenProjects();
@@ -328,68 +361,74 @@ async function exenSubmitEntry() {
 let EXEN_CURRENT_ENTRIES = [];
 
 async function refreshExenDashboard() {
-  const data = await gsr('getDistrictDashboard', EXEN_STATE.districtId, EXEN_STATE.fyId);
-  EXEN_CURRENT_ENTRIES = data.entries || [];
   const card = document.getElementById('exenSummaryCard');
-  if (!card) return;
-
-  const sentBackCount = data.entries.filter(e => e.status === 'SENT_BACK').length;
-  card.innerHTML = `
-    <h2>Fiscal Year Summary</h2>
-    <div class="stat-grid">
-      <div class="stat-box"><div class="num">${data.totalSamples}</div><div class="lbl">Active Expected Samples (In Calculation)</div></div>
-      <div class="stat-box"><div class="num">${data.entries.filter(e => e.status !== 'SENT_BACK').length}</div><div class="lbl">Active Submissions</div></div>
-      ${sentBackCount > 0 ? `<div class="stat-box" style="background:#fff1f2;border:1px solid #fecdd3"><div class="num" style="color:#e11d48">${sentBackCount}</div><div class="lbl" style="color:#be123c;font-weight:600">⚠️ Needs Revision (Sent Back by Admin)</div></div>` : ''}
-    </div>
-  `;
   const tableEl = document.getElementById('exenEntriesTable');
-  if (!tableEl) return;
-  tableEl.innerHTML = data.entries.length === 0 ? `<div class="empty-state">No entries yet.</div>` : `
-    <table>
-      <thead>
-        <tr>
-          <th>Project</th>
-          <th>Expected Samples</th>
-          <th>Parameters</th>
-          <th>Status</th>
-          <th>Remarks</th>
-          <th>Date</th>
-          <th style="text-align:right">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${data.entries.map(e => {
-          const isSentBack = e.status === 'SENT_BACK';
-          return `
-          <tr id="exen-entry-${esc(e.entryId)}" style="${isSentBack ? 'background:#fff1f2' : ''}">
-            <td><strong>${esc(e.projectName)}</strong></td>
-            <td style="font-weight:700;font-size:14px;color:${isSentBack ? '#e11d48' : '#0d6efd'}">${esc(e.expectedSamples)}</td>
-            <td style="font-size:12px">${esc(paramNamesFromIds(e.parameterIds, EXEN_STATE.parameters))}</td>
-            <td>
-              ${isSentBack ? `
-                <span class="badge" style="background:#fee2e2;color:#991b1b;font-weight:700;padding:3px 8px">⚠️ Sent Back for Revision</span>
-                <div style="font-size:11px;color:#dc2626;margin-top:3px"><strong>Admin Note:</strong> ${esc(e.sendBackReason || 'Revision needed')}</div>
-                <div style="font-size:10px;color:#64748b;font-style:italic">Excluded from chemical calculation</div>
-              ` : `
-                <span class="badge" style="background:#dcfce7;color:#166534;font-weight:600;padding:3px 8px">🔒 Submitted (Locked)</span>
-              `}
-            </td>
-            <td style="font-size:12px;color:#64748b">${esc(e.remarks || '-')}</td>
-            <td style="font-size:12px;color:#64748b">${esc(e.enteredAt)}</td>
-            <td style="text-align:right">
-              ${isSentBack ? `
-                <div class="td-actions" style="justify-content:flex-end">
-                  <button type="button" class="btn-sm btn-edit" style="background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;font-weight:600" onclick="editExenEntry('${esc(e.entryId)}')">✏️ Edit & Resubmit</button>
-                  <button type="button" class="btn-sm btn-delete" onclick="deleteExenEntry('${esc(e.entryId)}')">🗑️ Discard</button>
-                </div>
-              ` : `
-                <span style="font-size:11px;color:#94a3b8;font-style:italic">🔒 Locked (Admin send-back needed)</span>
-              `}
-            </td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>`;
+  try {
+    const data = await gsr('getDistrictDashboard', EXEN_STATE.districtId, EXEN_STATE.fyId);
+    EXEN_CURRENT_ENTRIES = data.entries || [];
+    if (!card) return;
+
+    const sentBackCount = data.entries.filter(e => e.status === 'SENT_BACK').length;
+    card.innerHTML = `
+      <h2>Fiscal Year Summary</h2>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="num">${data.totalSamples}</div><div class="lbl">Active Expected Samples (In Calculation)</div></div>
+        <div class="stat-box"><div class="num">${data.entries.filter(e => e.status !== 'SENT_BACK').length}</div><div class="lbl">Active Submissions</div></div>
+        ${sentBackCount > 0 ? `<div class="stat-box" style="background:#fff1f2;border:1px solid #fecdd3"><div class="num" style="color:#e11d48">${sentBackCount}</div><div class="lbl" style="color:#be123c;font-weight:600">⚠️ Needs Revision (Sent Back by Admin)</div></div>` : ''}
+      </div>
+    `;
+    if (!tableEl) return;
+    tableEl.innerHTML = data.entries.length === 0 ? `<div class="empty-state">No entries yet.</div>` : `
+      <table>
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Expected Samples</th>
+            <th>Parameters</th>
+            <th>Status</th>
+            <th>Remarks</th>
+            <th>Date</th>
+            <th style="text-align:right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.entries.map(e => {
+            const isSentBack = e.status === 'SENT_BACK';
+            return `
+            <tr id="exen-entry-${esc(e.entryId)}" style="${isSentBack ? 'background:#fff1f2' : ''}">
+              <td><strong>${esc(e.projectName)}</strong></td>
+              <td style="font-weight:700;font-size:14px;color:${isSentBack ? '#e11d48' : '#0d6efd'}">${esc(e.expectedSamples)}</td>
+              <td style="font-size:12px">${esc(paramNamesFromIds(e.parameterIds, EXEN_STATE.parameters))}</td>
+              <td>
+                ${isSentBack ? `
+                  <span class="badge" style="background:#fee2e2;color:#991b1b;font-weight:700;padding:3px 8px">⚠️ Sent Back for Revision</span>
+                  <div style="font-size:11px;color:#dc2626;margin-top:3px"><strong>Admin Note:</strong> ${esc(e.sendBackReason || 'Revision needed')}</div>
+                  <div style="font-size:10px;color:#64748b;font-style:italic">Excluded from chemical calculation</div>
+                ` : `
+                  <span class="badge" style="background:#dcfce7;color:#166534;font-weight:600;padding:3px 8px">🔒 Submitted (Locked)</span>
+                `}
+              </td>
+              <td style="font-size:12px;color:#64748b">${esc(e.remarks || '-')}</td>
+              <td style="font-size:12px;color:#64748b">${esc(e.enteredAt)}</td>
+              <td style="text-align:right">
+                ${isSentBack ? `
+                  <div class="td-actions" style="justify-content:flex-end">
+                    <button type="button" class="btn-sm btn-edit" style="background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;font-weight:600" onclick="editExenEntry('${esc(e.entryId)}')">✏️ Edit & Resubmit</button>
+                    <button type="button" class="btn-sm btn-delete" onclick="deleteExenEntry('${esc(e.entryId)}')">🗑️ Discard</button>
+                  </div>
+                ` : `
+                  <span style="font-size:11px;color:#94a3b8;font-style:italic">🔒 Locked (Admin send-back needed)</span>
+                `}
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  } catch (err) {
+    const msg = `<div class="msg error">Failed to load: ${esc(err && err.message ? err.message : String(err))} <button type="button" onclick="refreshExenDashboard()">Retry</button></div>`;
+    if (card) card.innerHTML = msg;
+    if (tableEl) tableEl.innerHTML = '';
+  }
 }
 
 function editExenEntry(entryId) {
@@ -511,7 +550,14 @@ async function renderChemistView() {
     </div>
   `;
 
-  document.getElementById('chemFY').addEventListener('change', e => { CHEMIST_STATE.fyId = e.target.value; refreshChemistDashboard(); });
+  document.getElementById('chemFY').addEventListener('change', async e => {
+    CHEMIST_STATE.fyId = e.target.value;
+    try {
+      await refreshChemistDashboard();
+    } catch (err) {
+      alert('Error loading data: ' + (err && err.message ? err.message : err));
+    }
+  });
   document.getElementById('privSubmitBtn').addEventListener('click', privSubmitEntry);
 
   el.querySelectorAll('.tab-btn').forEach(btn => {
@@ -537,8 +583,10 @@ function clientBadge(type) {
 }
 
 async function refreshChemistDashboard() {
-  const data = await gsr('getZoneDashboard', CHEMIST_STATE.zoneId, CHEMIST_STATE.fyId);
   const card = document.getElementById('chemSummaryCard');
+  const tableEl = document.getElementById('privEntriesTable');
+  try {
+  const data = await gsr('getZoneDashboard', CHEMIST_STATE.zoneId, CHEMIST_STATE.fyId);
   if (!card) return;
   CHEMIST_CURRENT_ENTRIES = data.privateEntries || [];
   const chemPredictionRows = (data.chemicalPrediction || []).map(p =>
@@ -572,7 +620,6 @@ async function refreshChemistDashboard() {
   window._CHEM_REPORT_DATA = { zone: CHEMIST_STATE.zoneName, fy: fyLabel, prediction: data.chemicalPrediction, grandTotal: data.grandTotalSamples, distBreakdown: data.districtBreakdown };
 
   // Update private entries table
-  const tableEl = document.getElementById('privEntriesTable');
   if (tableEl) {
     if (!data.privateEntries || data.privateEntries.length === 0) {
       tableEl.innerHTML = `<div class="empty-state">No private sample entries yet.</div>`;
@@ -628,6 +675,11 @@ async function refreshChemistDashboard() {
         </table>
       `;
     }
+  }
+  } catch (err) {
+    const msg = `<div class="msg error">Failed to load: ${esc(err && err.message ? err.message : String(err))} <button type="button" onclick="refreshChemistDashboard()">Retry</button></div>`;
+    if (card) card.innerHTML = msg;
+    if (tableEl) tableEl.innerHTML = '';
   }
 }
 
