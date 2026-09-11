@@ -780,11 +780,13 @@ function chemicalOptions(chemicals, selected) {
 // ---- active tab memory ----
 let ADMIN_ACTIVE_TAB = 'zones';
 
-async function renderAdminView() {
+async function renderAdminView(forceRefresh) {
   const el = document.getElementById('adminView');
-  el.innerHTML = `<div class="loading">Loading...</div>`;
-  const data = await gsr('getAdminBootstrap');
-  window.DB = data;
+  if (forceRefresh || !window.DB || !window.DB.zones) {
+    el.innerHTML = `<div class="loading">Loading...</div>`;
+    const data = await gsr('getAdminBootstrap');
+    window.DB = data;
+  }
 
   el.innerHTML = `
     <div class="tabs" id="adminTabs">
@@ -879,13 +881,13 @@ async function saveZone(id) {
   const name = document.getElementById('edit-zone-name-' + id).value.trim();
   if (!name) return;
   await gsr('adminUpdateZone', id, name);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteZone(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteZone', id);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindZonesTab(data) {
@@ -893,7 +895,7 @@ function bindZonesTab(data) {
     const name = document.getElementById('newZoneName').value.trim();
     if (!name) return;
     await gsr('adminAddZone', name);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -945,13 +947,13 @@ async function saveDist(id) {
   const zoneId = document.getElementById('edit-dist-zone-' + id).value;
   if (!name) return;
   await gsr('adminUpdateDistrict', id, name, zoneId);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteDist(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteDistrict', id);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindDistrictsTab(data) {
@@ -960,7 +962,7 @@ function bindDistrictsTab(data) {
     const zoneId = document.getElementById('newDistZone').value;
     if (!name) return;
     await gsr('adminAddDistrict', name, zoneId);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -1045,13 +1047,13 @@ async function saveUser(email, safeId) {
   const active = document.getElementById('eu-active-' + safeId).value === 'true';
   if (!name) return;
   await gsr('adminUpdateUser', email, name, role, districtId, zoneId, active);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteUser(email, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteUser', email);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindUsersTab(data) {
@@ -1072,7 +1074,7 @@ function bindUsersTab(data) {
     const zoneId = document.getElementById('newUserZone').value;
     if (!email || !name) return;
     await gsr('adminAddUser', email, name, role, districtId, zoneId);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -1277,13 +1279,13 @@ async function saveProject(id) {
   const distIds = getProjectScopeData('edit-' + id);
   if (distIds.length === 0) { alert('কমপক্ষে একটি জেলা নির্বাচন করুন অথবা All Districts বেছে নিন।'); return; }
   await gsr('adminUpdateProject', id, name, distIds, fyId);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteProject(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteProject', id);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindProjectsTab(data) {
@@ -1294,7 +1296,7 @@ function bindProjectsTab(data) {
     const distIds = getProjectScopeData('new');
     if (distIds.length === 0) { alert('কমপক্ষে একটি জেলা নির্বাচন করুন অথবা All Districts বেছে নিন।'); return; }
     await gsr('adminAddProject', name, distIds, fyId);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -1520,7 +1522,7 @@ async function openSendBackPrompt(entryId) {
   try {
     await gsr('adminSendBackEntry', entryId, reason.trim());
     ADMIN_ACTIVE_TAB = 'submissions';
-    await renderAdminView();
+    await renderAdminView(true);
     alert('এন্ট্রিটি সফলভাবে ফেরত পাঠানো (Sent Back) হয়েছে। এটি কেমিক্যাল ক্যালকুলেশন থেকে বাদ রাখা হয়েছে এবং সংশ্লিষ্ট ইউজার এটি সংশোধন করে পুনরায় জমা দিতে পারবেন।');
   } catch(err) {
     alert('Error: ' + err.message);
@@ -1577,14 +1579,14 @@ async function saveAdminSubmission(entryId) {
 
   await gsr('updateSampleEntry', entryId, { districtId, projectId, expectedSamples, parameterIds: paramIds, remarks });
   ADMIN_ACTIVE_TAB = 'submissions';
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteAdminSubmission(entryId) {
   if (!confirm('আপনি কি নিশ্চিত যে এই Entry টি ডাটাবেজ থেকে মুছে ফেলতে চান? এটি Chemical Prediction ও ড্যাশবোর্ডে প্রভাব ফেলবে।')) return;
   await gsr('deleteSampleEntry', entryId);
   ADMIN_ACTIVE_TAB = 'submissions';
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function editAdminPrivateSubmission(entryId) {
@@ -1638,14 +1640,14 @@ async function saveAdminPrivateSubmission(entryId) {
 
   await gsr('updatePrivateSampleEntry', entryId, { clientType, clientName, expectedSamples, parameterIds: paramIds, remarks });
   ADMIN_ACTIVE_TAB = 'submissions';
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteAdminPrivateSubmission(entryId) {
   if (!confirm('আপনি কি নিশ্চিত যে এই Private Entry টি ডাটাবেজ থেকে মুছে ফেলতে চান? এটি Chemical Prediction ও ড্যাশবোর্ডে প্রভাব ফেলবে।')) return;
   await gsr('deletePrivateSampleEntry', entryId);
   ADMIN_ACTIVE_TAB = 'submissions';
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindSubmissionsTab(data) {
@@ -1704,13 +1706,13 @@ async function saveParam(id) {
   const category = document.getElementById('ep-cat-' + id).value.trim();
   if (!name) return;
   await gsr('adminUpdateParameter', id, name, unit, category);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteParam(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteParameter', id);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindParamsTab(data) {
@@ -1720,7 +1722,7 @@ function bindParamsTab(data) {
     const category = document.getElementById('newParamCategory').value.trim();
     if (!name) return;
     await gsr('adminAddParameter', name, unit, category);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -1777,13 +1779,13 @@ async function saveChem(id) {
   const unit = document.getElementById('ec-unit-' + id).value.trim();
   if (!name) return;
   await gsr('adminUpdateChemical', id, name, unit);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteChem(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteChemical', id);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindChemicalsTab(data) {
@@ -1792,7 +1794,7 @@ function bindChemicalsTab(data) {
     const unit = document.getElementById('newChemUnit').value.trim();
     if (!name) return;
     await gsr('adminAddChemical', name, unit);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -1884,13 +1886,13 @@ async function saveRecipe(rowId) {
   const chem = DB.chemicals.find(c => c.ChemicalID === chemId);
   const unit = chem ? chem.Unit : '';
   await gsr('adminUpdateParameterChemical', rowId, paramId, chemId, qty, unit);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteRecipe(rowId, name) {
   if (!confirmDelete(name + ' recipe row')) return;
   await gsr('adminDeleteParameterChemical', rowId);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindRecipeTab(data) {
@@ -1910,7 +1912,7 @@ function bindRecipeTab(data) {
     const chem = DB.chemicals.find(c => c.ChemicalID === chemicalId);
     const unit = chem ? chem.Unit : '';
     await gsr('adminAddParameterChemical', parameterId, chemicalId, qty, unit);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -1962,13 +1964,13 @@ async function saveFY(id) {
   const isActive = document.getElementById('ef-active-' + id).value === 'true';
   if (!label) return;
   await gsr('adminUpdateFiscalYear', id, label, isActive);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 async function deleteFY(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteFiscalYear', id);
-  renderAdminView();
+  renderAdminView(true);
 }
 
 function bindFYTab(data) {
@@ -1977,7 +1979,7 @@ function bindFYTab(data) {
     const active = document.getElementById('newFYActive').value === 'true';
     if (!label) return;
     await gsr('adminAddFiscalYear', label, active);
-    renderAdminView();
+    renderAdminView(true);
   });
 }
 
@@ -2380,7 +2382,7 @@ function processExcelSetupUpload() {
       }
 
       saveDB(DB);
-      renderAdminView();
+      renderAdminView(true);
       alert('✓ এক্সেল সেটআপ সফলভাবে লোড হয়েছে!\n\nলোডেড রেকর্ডসমূহ:\n• ' + (counts.join('\n• ') || 'কোনো ভ্যালিড শিট পাওয়া যায়নি।'));
     } catch (err) {
       alert('Error reading Excel file: ' + err.message);
@@ -2411,7 +2413,7 @@ function triggerJSONRestore() {
       if (!parsed.zones || !parsed.districts) throw new Error('Invalid DPHE database JSON format');
       DB = parsed;
       saveDB(DB);
-      renderAdminView();
+      renderAdminView(true);
       alert('✓ JSON ব্যাকআপ সফলভাবে রিস্টোর হয়েছে!');
     } catch(err) {
       alert('Error importing JSON: ' + err.message);
@@ -2444,7 +2446,7 @@ window.addEventListener('DOMContentLoaded', () => {
     renderChemistView();
   } else if (CURRENT_USER.role === 'ADMIN') {
     document.getElementById('adminView').style.display = 'block';
-    renderAdminView();
+    renderAdminView(true);
   }
 });
 </script>
