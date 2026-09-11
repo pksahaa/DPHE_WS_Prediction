@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DPHE Zonal Lab - Login</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.min.css">
   <style>
     html, body { height: 100%; }
     body {
@@ -51,8 +51,8 @@
     }
     .brand-top { position: relative; z-index: 1; }
     .logo-row {
-      display: flex; align-items: center; gap: 14px;
-      margin-bottom: 24px;
+      display: flex; align-items: center; justify-content: center; gap: 14px;
+      margin: 0 auto 24px;
     }
     .logo-row img {
       height: 52px !important; width: auto !important;
@@ -174,6 +174,30 @@
       .brand-features { display: none; }
       .form-panel { padding: 32px 28px; }
     }
+  
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15,23,42,0.6); display: none;
+      align-items: center; justify-content: center; z-index: 9999;
+      backdrop-filter: blur(2px);
+      padding: 16px;
+    }
+    .modal-backdrop.show { display: flex; animation: fadeIn 0.15s ease; }
+    .modal-box {
+      background: #fff; border-radius: 16px; width: 100%; max-width: 420px;
+      padding: 26px; box-shadow: var(--shadow-lg);
+      border: 1px solid var(--border);
+    }
+    .modal-box h3 { margin-top: 0; margin-bottom: 8px; font-size: 18px; font-weight: 800; color: var(--text); }
+    .modal-box p { font-size: 13px; color: var(--muted); margin: 0 0 16px; line-height: 1.5; }
+    .btn-cancel {
+      padding: 9px 16px; border: 1.5px solid var(--border); background: #f8fafc;
+      color: var(--text); border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+    }
+    .btn-cancel:hover { background: #e2e8f0; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
   </style>
 </head>
 <body>
@@ -188,9 +212,15 @@
 
   <div class="brand-panel">
     <div class="brand-top">
-      <div class="logo-row" style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;">
-        <img src="bd-logo.png" alt="Government of Bangladesh" width="52" height="52" style="height:52px;width:52px;object-fit:contain;border-radius:10px;background:rgba(255,255,255,0.92);padding:5px;flex-shrink:0;">
-        <img src="dphe-logo.png" alt="DPHE" width="39" height="52" style="height:52px;width:39px;object-fit:contain;border-radius:10px;background:rgba(255,255,255,0.92);padding:5px;flex-shrink:0;">
+      <div class="logo-row" style="display:flex;align-items:center;justify-content:center;gap:14px;margin:0 auto 24px;flex-wrap:nowrap;">
+        <picture>
+          <source srcset="bd-logo.webp" type="image/webp">
+          <img src="bd-logo.png" alt="Government of Bangladesh" width="54" height="54" style="height:54px;width:54px;object-fit:contain;border-radius:10px;background:rgba(255,255,255,0.95);padding:5px;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,0.18);">
+        </picture>
+        <picture>
+          <source srcset="dphe-logo.webp" type="image/webp">
+          <img src="dphe-logo.png" alt="DPHE" width="40" height="54" style="height:54px;width:40px;object-fit:contain;border-radius:10px;background:rgba(255,255,255,0.95);padding:5px;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,0.18);">
+        </picture>
       </div>
       <h1>Laboratory Test<br>Prediction System</h1>
       <p class="lead">Fiscal Year Sample &amp; Chemical Requirement Planning System — Department of Public Health Engineering</p>
@@ -203,7 +233,7 @@
     </div>
 
     <div class="brand-foot">
-      Department of Public Health Engineering (DPHE) &copy; <span id="yearNow"></span>
+      Developed by PK Saha &copy; <span id="yearNow"></span>
     </div>
   </div>
 
@@ -225,7 +255,10 @@
       </div>
 
       <div class="field">
-        <label for="loginPassword">Password</label>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <label for="loginPassword" style="margin-bottom:0">Password</label>
+          <a href="#" onclick="openResetModal(event)" style="font-size:12px;color:var(--primary);text-decoration:none;font-weight:600;">Forgot Password?</a>
+        </div>
         <div class="input-wrap">
           <span class="ic">🔒</span>
           <input type="password" id="loginPassword" required placeholder="••••••••" autocomplete="current-password">
@@ -250,12 +283,13 @@ document.getElementById('yearNow').textContent = new Date().getFullYear();
 // { fn, args } JSON body. Uses "text/plain" as the content type so
 // the browser does NOT send a CORS preflight (Apps Script Web Apps
 // can't handle custom OPTIONS/CORS headers on simple deployments).
-function apiCall(fn, args) {
+function apiCall(fn, args, isRetry) {
   if (!API_URL || API_URL.indexOf('[') === 0) {
     return Promise.reject(new Error('API_URL is not configured. Set it at the top of index.html.'));
   }
   var controller = new AbortController();
-  var timeoutId = setTimeout(function() { controller.abort(); }, 25000); // 25s safety timeout
+  // 50s timeout: Google Apps Script cold-starts can take 20-30s on first execution
+  var timeoutId = setTimeout(function() { controller.abort(); }, 50000);
 
   return fetch(API_URL, {
     method: 'POST',
@@ -274,21 +308,36 @@ function apiCall(fn, args) {
     })
     .catch(function(err) {
       clearTimeout(timeoutId);
-      if (err && err.name === 'AbortError') {
-        throw new Error('Server did not respond in time (25s). Please try again.');
+      var isTimeout = err && (err.name === 'AbortError' || String(err.message).includes('aborted'));
+      var isNetError = err && (err.name === 'TypeError' || String(err.message).includes('Network error') || String(err.message).includes('Failed to fetch'));
+
+      // If the call failed due to cold start timeout or network drop, retry once automatically
+      if (!isRetry && (isTimeout || isNetError)) {
+        console.warn('Login call timed out or network error. Retrying once...', err);
+        return apiCall(fn, args, true);
+      }
+
+      if (isTimeout) {
+        throw new Error('Server did not respond in time (50 seconds). Please check your internet connection and try again.');
       }
       throw err;
     });
 }
 
-// If already logged in with a valid-looking saved session, skip
-// straight to the app page.
+// If already logged in with a valid-looking saved session, skip straight to app.html.
+// Also send a gentle background warmup ping to spin up the Apps Script container while user types credentials.
 window.addEventListener('DOMContentLoaded', function() {
   var savedToken = sessionStorage.getItem('dphe_auth_token');
   var savedUser = sessionStorage.getItem('dphe_user');
   if (savedToken && savedUser) {
     window.location.href = 'app.html';
+    return;
   }
+
+  // Pre-warm Google Apps Script cold container in background
+  try {
+    fetch(API_URL, { method: 'GET', mode: 'no-cors', cache: 'no-store' }).catch(function() {});
+  } catch (e) {}
 });
 
 function togglePassword() {
@@ -342,6 +391,43 @@ function esc(s) {
   });
 }
 </script>
+
+
+<!-- Reset Password Modal -->
+<div class="modal-backdrop" id="resetPasswordModal">
+  <div class="modal-box">
+    <h3>🔑 Reset Password</h3>
+    <p>Enter your registered DPHE email and choose a new password.</p>
+    <div id="resetModalAlert"></div>
+    <form id="resetPasswordForm" onsubmit="handlePublicResetSubmit(event)">
+      <div class="field">
+        <label for="resetEmail">Registered Email</label>
+        <div class="input-wrap">
+          <span class="ic">✉️</span>
+          <input type="email" id="resetEmail" required placeholder="user@dphe.gov.bd">
+        </div>
+      </div>
+      <div class="field">
+        <label for="resetNewPass">New Password</label>
+        <div class="input-wrap">
+          <span class="ic">🔒</span>
+          <input type="password" id="resetNewPass" required minlength="4" placeholder="At least 4 characters">
+        </div>
+      </div>
+      <div class="field">
+        <label for="resetConfirmPass">Confirm Password</label>
+        <div class="input-wrap">
+          <span class="ic">🔒</span>
+          <input type="password" id="resetConfirmPass" required minlength="4" placeholder="Re-enter new password">
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+        <button type="button" class="btn-cancel" onclick="closeResetModal()">Cancel</button>
+        <button type="submit" id="resetSubmitBtn" class="btn-login" style="width:auto;padding:9px 18px;margin-top:0">Reset Password</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 </body>
 </html>
