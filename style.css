@@ -57,7 +57,9 @@
   }
   header.topbar .brand { display: flex; align-items: center; gap: 14px; }
   .topbar-logo {
-    height: 38px; width: auto;
+    height: 38px !important; width: auto !important;
+    max-width: 60px;
+    object-fit: contain;
     background: rgba(255,255,255,0.92);
     border-radius: 8px;
     padding: 3px;
