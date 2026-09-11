@@ -126,8 +126,11 @@ var MASTER_DATA_CACHE_KEY = 'dphe_master_data_v1';
  * - In the background (or if no cache exists), a single consolidated API call
  *   fetches fresh data from the server and updates the cache for next time.
  */
-async function loadMasterData() {
-  var cachedRaw = localStorage.getItem(MASTER_DATA_CACHE_KEY);
+async function loadMasterData(forceFresh) {
+  if (forceFresh) {
+    try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
+  }
+  var cachedRaw = forceFresh ? null : localStorage.getItem(MASTER_DATA_CACHE_KEY);
   var cached = null;
   if (cachedRaw) {
     try { cached = JSON.parse(cachedRaw); } catch(e) { /* ignore corrupt cache */ }
@@ -136,14 +139,14 @@ async function loadMasterData() {
   if (cached) {
     // Serve cache now, refresh in background
     gsr('getAppInitData').then(function(fresh) {
-      localStorage.setItem(MASTER_DATA_CACHE_KEY, JSON.stringify(fresh));
+      if (fresh) localStorage.setItem(MASTER_DATA_CACHE_KEY, JSON.stringify(fresh));
     }).catch(function() { /* background refresh failure is non-fatal */ });
     return cached;
   }
 
   // No cache: fetch fresh (blocking), then store
   const fresh = await gsr('getAppInitData');
-  localStorage.setItem(MASTER_DATA_CACHE_KEY, JSON.stringify(fresh));
+  if (fresh) localStorage.setItem(MASTER_DATA_CACHE_KEY, JSON.stringify(fresh));
   return fresh;
 }
 
@@ -309,8 +312,10 @@ function getCheckedParamIds(formEl, name) {
   return Array.from(formEl.querySelectorAll(`input[data-group="${name}"]:checked`)).map(el => el.value);
 }
 function paramNamesFromIds(ids, parameters) {
-  const map = {}; (parameters || []).forEach(p => map[normId(p.ParameterID)] = p.ParameterName);
-  return (ids || []).map(id => map[normId(id)] || id).join(', ');
+  const map = {};
+  (parameters || []).forEach(p => { if (p && p.ParameterID) map[normId(p.ParameterID)] = p.ParameterName; });
+  const cleanIds = Array.isArray(ids) ? ids : (typeof ids === 'string' ? parseParamIds(ids) : []);
+  return cleanIds.map(id => map[normId(id)] || id).join(', ');
 }
 function parseParamIds(val) {
   if (!val) return [];
@@ -452,9 +457,12 @@ async function refreshExenDashboard() {
   const card = document.getElementById('exenSummaryCard');
   const tableEl = document.getElementById('exenEntriesTable');
   try {
-    const data = await gsr('getDistrictDashboard', EXEN_STATE.districtId, EXEN_STATE.fyId);
-    EXEN_CURRENT_ENTRIES = data.entries || [];
+    const rawData = await gsr('getDistrictDashboard', EXEN_STATE.districtId, EXEN_STATE.fyId);
     if (!card) return;
+    const data = (rawData && typeof rawData === 'object') ? rawData : {};
+    data.entries = Array.isArray(data.entries) ? data.entries : [];
+    data.totalSamples = Number(data.totalSamples) || 0;
+    EXEN_CURRENT_ENTRIES = data.entries;
 
     const sentBackCount = data.entries.filter(e => e.status === 'SENT_BACK').length;
     card.innerHTML = `
@@ -769,44 +777,53 @@ async function refreshChemistDashboard() {
   const card = document.getElementById('chemSummaryCard');
   const tableEl = document.getElementById('privEntriesTable');
   try {
-  const data = await gsr('getZoneDashboard', CHEMIST_STATE.zoneId, CHEMIST_STATE.fyId);
-  if (!card) return;
-  CHEMIST_CURRENT_ENTRIES = data.privateEntries || [];
-  const chemPredictionRows = (data.chemicalPrediction || []).map(p =>
-    `<tr><td>${esc(p.chemicalName)}</td><td style="font-weight:600">${Number(p.totalQty).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${esc(p.unit)}</td></tr>`
-  ).join('');
-  const fyLabel = document.getElementById('chemFY') ? document.getElementById('chemFY').options[document.getElementById('chemFY').selectedIndex].text : '';
-  card.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h2 style="margin:0">Zone-wide Fiscal Year Summary</h2>
-      <button type="button" class="secondary btn-sm" style="padding:8px 16px;font-size:13px" onclick="printChemicalReport()">🖨️ Chemical Report Print</button>
-    </div>
-    <div class="stat-grid">
-      <div class="stat-box"><div class="num">${data.grandTotalSamples}</div><div class="lbl">Total Samples (Govt + Zone Entries)</div></div>
-      <div class="stat-box"><div class="num">${data.totalGovtSamples}</div><div class="lbl">Government / District Samples</div></div>
-      <div class="stat-box"><div class="num">${data.totalPrivateSamples}</div><div class="lbl">Zone Sample Entries</div></div>
-    </div>
-    <h3>District-wise Breakdown</h3>
-    <table><thead><tr><th>District</th><th>Expected Samples</th><th>Entries</th></tr></thead>
-    <tbody>${data.districtBreakdown.map(d => `<tr><td>${esc(d.districtName)}</td><td>${d.totalSamples}</td><td>${d.entryCount}</td></tr>`).join('')}</tbody></table>
-    <h3>Sample Breakdown by Category</h3>
-    <table><thead><tr><th>Client Type</th><th>Expected Samples</th><th>Entries</th></tr></thead>
-    <tbody>${data.privateBreakdownByType.map(p => `<tr><td>${clientBadge(p.clientType)}</td><td>${p.totalSamples}</td><td>${p.entryCount}</td></tr>`).join('')}</tbody></table>
-    <h3 style="margin-top:20px">🧪 Predicted Chemical Requirement (Zone-wide)</h3>
-    ${data.chemicalPrediction && data.chemicalPrediction.length > 0 ? `
-    <table id="chemPredTable">
-      <thead><tr><th>Chemical</th><th>Total Qty Needed</th><th>Unit</th></tr></thead>
-      <tbody>${chemPredictionRows}</tbody>
-    </table>` : '<div class="empty-state">No sample entries yet — chemical prediction will appear here once EXEN data is submitted.</div>'}
-  `;
-  // Store for print
-  window._CHEM_REPORT_DATA = { zone: CHEMIST_STATE.zoneName, fy: fyLabel, prediction: data.chemicalPrediction, grandTotal: data.grandTotalSamples, distBreakdown: data.districtBreakdown };
+    const rawData = await gsr('getZoneDashboard', CHEMIST_STATE.zoneId, CHEMIST_STATE.fyId);
+    if (!card) return;
+    const data = (rawData && typeof rawData === 'object') ? rawData : {};
+    data.districtBreakdown = Array.isArray(data.districtBreakdown) ? data.districtBreakdown : [];
+    data.privateBreakdownByType = Array.isArray(data.privateBreakdownByType) ? data.privateBreakdownByType : [];
+    data.chemicalPrediction = Array.isArray(data.chemicalPrediction) ? data.chemicalPrediction : [];
+    data.privateEntries = Array.isArray(data.privateEntries) ? data.privateEntries : [];
+    data.grandTotalSamples = Number(data.grandTotalSamples) || 0;
+    data.totalGovtSamples = Number(data.totalGovtSamples) || 0;
+    data.totalPrivateSamples = Number(data.totalPrivateSamples) || 0;
 
-  // Update private entries table
-  if (tableEl) {
-    if (!data.privateEntries || data.privateEntries.length === 0) {
-      tableEl.innerHTML = `<div class="empty-state">No sample entries yet.</div>`;
-    } else {
+    CHEMIST_CURRENT_ENTRIES = data.privateEntries;
+    const chemPredictionRows = data.chemicalPrediction.map(p =>
+      `<tr><td>${esc(p.chemicalName)}</td><td style="font-weight:600">${Number(p.totalQty).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${esc(p.unit)}</td></tr>`
+    ).join('');
+    const fyLabel = document.getElementById('chemFY') ? document.getElementById('chemFY').options[document.getElementById('chemFY').selectedIndex].text : '';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h2 style="margin:0">Zone-wide Fiscal Year Summary</h2>
+        <button type="button" class="secondary btn-sm" style="padding:8px 16px;font-size:13px" onclick="printChemicalReport()">🖨️ Chemical Report Print</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="num">${data.grandTotalSamples}</div><div class="lbl">Total Samples (Govt + Zone Entries)</div></div>
+        <div class="stat-box"><div class="num">${data.totalGovtSamples}</div><div class="lbl">Government / District Samples</div></div>
+        <div class="stat-box"><div class="num">${data.totalPrivateSamples}</div><div class="lbl">Zone Sample Entries</div></div>
+      </div>
+      <h3>District-wise Breakdown</h3>
+      <table><thead><tr><th>District</th><th>Expected Samples</th><th>Entries</th></tr></thead>
+      <tbody>${data.districtBreakdown.map(d => `<tr><td>${esc(d.districtName)}</td><td>${d.totalSamples}</td><td>${d.entryCount}</td></tr>`).join('')}</tbody></table>
+      <h3>Sample Breakdown by Category</h3>
+      <table><thead><tr><th>Client Type</th><th>Expected Samples</th><th>Entries</th></tr></thead>
+      <tbody>${data.privateBreakdownByType.map(p => `<tr><td>${clientBadge(p.clientType)}</td><td>${p.totalSamples}</td><td>${p.entryCount}</td></tr>`).join('')}</tbody></table>
+      <h3 style="margin-top:20px">🧪 Predicted Chemical Requirement (Zone-wide)</h3>
+      ${data.chemicalPrediction.length > 0 ? `
+      <table id="chemPredTable">
+        <thead><tr><th>Chemical</th><th>Total Qty Needed</th><th>Unit</th></tr></thead>
+        <tbody>${chemPredictionRows}</tbody>
+      </table>` : '<div class="empty-state">No sample entries yet — chemical prediction will appear here once EXEN data is submitted.</div>'}
+    `;
+    // Store for print
+    window._CHEM_REPORT_DATA = { zone: CHEMIST_STATE.zoneName, fy: fyLabel, prediction: data.chemicalPrediction, grandTotal: data.grandTotalSamples, distBreakdown: data.districtBreakdown };
+
+    // Update private entries table
+    if (tableEl) {
+      if (data.privateEntries.length === 0) {
+        tableEl.innerHTML = `<div class="empty-state">No sample entries yet.</div>`;
+      } else {
       tableEl.innerHTML = `
         <table>
           <thead>
@@ -1033,8 +1050,8 @@ async function privSubmitEntry() {
     if (document.getElementById('privOtherSpecify')) document.getElementById('privOtherSpecify').value = '';
     togglePrivOtherField();
     document.querySelectorAll('input[data-group="priv"]').forEach(cb => cb.checked = false);
-    await refreshChemistDashboard();
     showMsg(document.getElementById('chemistView'), 'Saved successfully.', 'success');
+    await refreshChemistDashboard();
   } catch (err) {
     showMsg(document.getElementById('chemistView'), 'Error: ' + err.message, 'error');
   } finally {
@@ -1700,7 +1717,7 @@ function renderSubmissionsTab(data) {
           ${e.isPrivate ? `<div style="font-size:11px;color:#4338ca">Client: ${esc(e.clientName)} (${esc(e.clientType)})</div>` : ''}
         </td>
         <td style="font-weight:700;font-size:14px;color:#0d6efd">${esc(e.expectedSamples)}</td>
-        <td style="max-width:240px;font-size:12px">${esc(e.parameterIds.map(pid => paramMap[pid] || pid).join(', '))}</td>
+        <td style="max-width:240px;font-size:12px">${esc(paramNamesFromIds(e.parameterIds, DB.parameters))}</td>
         <td>${statusBadge}</td>
         <td style="font-size:12px;color:#64748b">${esc(e.remarks || '-')}</td>
         <td style="font-size:12px">${esc(e.enteredBy)}<div style="font-size:10px;color:#94a3b8">${esc(e.enteredAt)}</div></td>
@@ -2211,12 +2228,14 @@ async function saveChem(id) {
   const unit = document.getElementById('ec-unit-' + id).value.trim();
   if (!name) return;
   await gsr('adminUpdateChemical', id, name, unit);
+  try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
   renderAdminView(true);
 }
 
 async function deleteChem(id, name) {
   if (!confirmDelete(name)) return;
   await gsr('adminDeleteChemical', id);
+  try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
   renderAdminView(true);
 }
 
@@ -2226,6 +2245,7 @@ function bindChemicalsTab(data) {
     const unit = document.getElementById('newChemUnit').value.trim();
     if (!name) return;
     await gsr('adminAddChemical', name, unit);
+    try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
     renderAdminView(true);
   });
 }
@@ -2318,12 +2338,14 @@ async function saveRecipe(rowId) {
   const chem = DB.chemicals.find(c => c.ChemicalID === chemId);
   const unit = chem ? chem.Unit : '';
   await gsr('adminUpdateParameterChemical', rowId, paramId, chemId, qty, unit);
+  try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
   renderAdminView(true);
 }
 
 async function deleteRecipe(rowId, name) {
   if (!confirmDelete(name + ' recipe row')) return;
   await gsr('adminDeleteParameterChemical', rowId);
+  try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
   renderAdminView(true);
 }
 
@@ -2344,6 +2366,7 @@ function bindRecipeTab(data) {
     const chem = DB.chemicals.find(c => c.ChemicalID === chemicalId);
     const unit = chem ? chem.Unit : '';
     await gsr('adminAddParameterChemical', parameterId, chemicalId, qty, unit);
+    try { localStorage.removeItem(MASTER_DATA_CACHE_KEY); } catch(e) {}
     renderAdminView(true);
   });
 }
