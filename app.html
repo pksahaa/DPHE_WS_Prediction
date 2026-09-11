@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,21 +12,25 @@
 <script>
   // Set this to your deployed Apps Script Web App URL, e.g.
   // https://script.google.com/macros/s/XXXXXXXXXXXXXXXXXXXX/exec
-  const API_URL = https://script.google.com/macros/s/AKfycbzejly43ZBwwcQs7jdMil5EfGhD0FwMmNmbjgHf8-zHdf7Q-QeEnQdwHH2jp842V0c7jQ/exec;
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzejly43ZBwwcQs7jdMil5EfGhD0FwMmNmbjgHf8-zHdf7Q-QeEnQdwHH2jp842V0c7jQ/exec';
 </script>
 
 <header class="topbar">
-  <div>
-    <h1>DPHE Water Sample Prediction System</h1>
-    <div class="sub">Fiscal Year Sample &amp; Chemical Requirement Planning</div>
+  <div class="brand">
+    <img src="bd-logo.png" alt="Government of Bangladesh" class="topbar-logo">
+    <img src="dphe-logo.png" alt="DPHE" class="topbar-logo">
+    <div>
+      <h1>DPHE Water Sample Prediction System</h1>
+      <div class="sub">Fiscal Year Sample &amp; Chemical Requirement Planning</div>
+    </div>
   </div>
   <div class="userbox">
     <div>
       <div id="userNameDisplay" style="font-weight:600">-</div>
       <div class="role-badge" id="roleBadgeDisplay">-</div>
     </div>
-    <button type="button" class="btn-sm btn-logout" onclick="openChangePasswordModal()">🔑 পাসওয়ার্ড পরিবর্তন</button>
-    <button type="button" class="btn-sm btn-logout" onclick="handleLogout()">🚪 লগআউট</button>
+    <button type="button" class="btn-sm btn-logout" onclick="openChangePasswordModal()">🔑 Change Password</button>
+    <button type="button" class="btn-sm btn-logout" onclick="handleLogout()">🚪 Logout</button>
   </div>
 </header>
 
@@ -39,20 +43,21 @@
 <!-- Change Password Modal -->
 <div class="modal-backdrop" id="changePasswordModal">
   <div class="modal-box">
-    <h3 style="margin-top:0;color:var(--primary-dark)">🔑 পাসওয়ার্ড পরিবর্তন করুন</h3>
+    <h3 style="margin-top:0;color:var(--primary-dark)">🔑 Change Password</h3>
     <div id="pwdModalAlert"></div>
     <form onsubmit="handleChangePasswordSubmit(event)">
-      <label>বর্তমান পাসওয়ার্ড</label>
+      <label>Current Password</label>
       <input type="password" id="oldPasswordInput" required placeholder="••••••••">
-      <label>নতুন পাসওয়ার্ড (কমপক্ষে ৪ অক্ষর)</label>
+      <label>New Password (minimum 4 characters)</label>
       <input type="password" id="newPasswordInput" required minlength="4" placeholder="••••••••">
-      <label>নতুন পাসওয়ার্ড পুনরায় লিখুন</label>
+      <label>Confirm New Password</label>
       <input type="password" id="confirmPasswordInput" required minlength="4" placeholder="••••••••">
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
-        <button type="button" class="btn-cancel" onclick="closeChangePasswordModal()">বাতিল</button>
-        <button type="submit" id="savePwdBtn" class="btn-save">সংরক্ষণ করুন</button>
+        <button type="button" class="btn-cancel" onclick="closeChangePasswordModal()">Cancel</button>
+        <button type="submit" id="savePwdBtn" class="btn-save">Save</button>
       </div>
     </form>
+
   </div>
 </div>
 

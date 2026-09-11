@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -50,24 +50,19 @@
       pointer-events: none;
     }
     .brand-top { position: relative; z-index: 1; }
-    .brand-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 11px; font-weight: 700;
-      background: rgba(255,255,255,0.14);
-      border: 1px solid rgba(255,255,255,0.3);
-      padding: 5px 12px; border-radius: 20px;
-      margin-bottom: 22px; letter-spacing: 0.3px;
+    .logo-row {
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 24px;
     }
-    .brand-icon {
-      width: 52px; height: 52px; border-radius: 14px;
-      background: rgba(255,255,255,0.16);
-      border: 1px solid rgba(255,255,255,0.3);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 26px; margin-bottom: 18px;
-      backdrop-filter: blur(4px);
+    .logo-row img {
+      height: 52px; width: auto;
+      background: rgba(255,255,255,0.92);
+      border-radius: 10px;
+      padding: 5px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
     .brand-panel h1 {
-      font-size: 25px; font-weight: 800; margin: 0 0 10px; line-height: 1.35;
+      font-size: 24px; font-weight: 800; margin: 0 0 10px; line-height: 1.35;
     }
     .brand-panel p.lead {
       font-size: 13.5px; opacity: 0.88; margin: 0; line-height: 1.6; max-width: 320px;
@@ -124,7 +119,7 @@
     .input-wrap .toggle-pass {
       position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
       background: none; border: none; box-shadow: none; color: var(--muted-light);
-      font-size: 13px; padding: 4px 6px; cursor: pointer;
+      font-size: 12px; font-weight: 700; padding: 4px 6px; cursor: pointer;
     }
     .input-wrap .toggle-pass:hover { color: var(--muted); background: none; transform: translateY(-50%); }
 
@@ -184,23 +179,25 @@
 <script>
   // Set this to your deployed Apps Script Web App URL, e.g.
   // https://script.google.com/macros/s/XXXXXXXXXXXXXXXXXXXX/exec
-  const API_URL = https://script.google.com/macros/s/AKfycbzejly43ZBwwcQs7jdMil5EfGhD0FwMmNmbjgHf8-zHdf7Q-QeEnQdwHH2jp842V0c7jQ/exec;
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzejly43ZBwwcQs7jdMil5EfGhD0FwMmNmbjgHf8-zHdf7Q-QeEnQdwHH2jp842V0c7jQ/exec';
 </script>
 
 <div class="login-shell">
 
   <div class="brand-panel">
     <div class="brand-top">
-      <div class="brand-badge">🇧🇩 গণপ্রজাতন্ত্রী বাংলাদেশ সরকার</div>
-      <div class="brand-icon">💧</div>
-      <h1>ল্যাবরেটরি টেস্ট<br>প্রিডিকশন সিস্টেম</h1>
+      <div class="logo-row">
+        <img src="bd-logo.png" alt="Government of Bangladesh">
+        <img src="dphe-logo.png" alt="DPHE">
+      </div>
+      <h1>Laboratory Test<br>Prediction System</h1>
       <p class="lead">Fiscal Year Sample &amp; Chemical Requirement Planning System — Department of Public Health Engineering</p>
     </div>
 
     <div class="brand-features">
-      <div class="feat"><span class="dot">📊</span> নমুনা ও রাসায়নিক চাহিদা পূর্বাভাস</div>
-      <div class="feat"><span class="dot">🧪</span> জোন ও জেলা ভিত্তিক ব্যবস্থাপনা</div>
-      <div class="feat"><span class="dot">🔒</span> সুরক্ষিত ভূমিকা-ভিত্তিক প্রবেশাধিকার</div>
+      <div class="feat"><span class="dot">📊</span> Sample &amp; chemical demand forecasting</div>
+      <div class="feat"><span class="dot">🧪</span> Zone &amp; district-wise management</div>
+      <div class="feat"><span class="dot">🔒</span> Secure role-based access</div>
     </div>
 
     <div class="brand-foot">
@@ -210,15 +207,15 @@
 
   <div class="form-panel">
     <div class="heading">
-      <h2>স্বাগতম 👋</h2>
-      <p>চালিয়ে যেতে আপনার একাউন্টে লগইন করুন</p>
+      <h2>Welcome 👋</h2>
+      <p>Sign in to your account to continue</p>
     </div>
 
     <div id="loginAlert"></div>
 
     <form id="loginForm" onsubmit="handleLoginSubmit(event)">
       <div class="field">
-        <label for="loginEmail">ইমেইল ঠিকানা (Email Address)</label>
+        <label for="loginEmail">Email Address</label>
         <div class="input-wrap">
           <span class="ic">✉️</span>
           <input type="email" id="loginEmail" required placeholder="user@dphe.gov.bd" autocomplete="username">
@@ -226,24 +223,24 @@
       </div>
 
       <div class="field">
-        <label for="loginPassword">পাসওয়ার্ড (Password)</label>
+        <label for="loginPassword">Password</label>
         <div class="input-wrap">
           <span class="ic">🔒</span>
           <input type="password" id="loginPassword" required placeholder="••••••••" autocomplete="current-password">
-          <button type="button" class="toggle-pass" onclick="togglePassword()" id="togglePassBtn" tabindex="-1">দেখুন</button>
+          <button type="button" class="toggle-pass" onclick="togglePassword()" id="togglePassBtn" tabindex="-1">SHOW</button>
         </div>
       </div>
 
       <button type="submit" id="loginBtn" class="btn-login">
-        <span id="btnText">লগইন করুন (Login)</span>
+        <span id="btnText">Login</span>
       </button>
     </form>
 
-    <div class="divider-note">সুরক্ষিত সংযোগ · DPHE Internal System</div>
+    <div class="divider-note">Secure Connection · DPHE Internal System</div>
 
     <div class="hint-box">
-      <strong>🔑 Default Login (প্রথমবার ব্যবহারের জন্য):</strong><br>
-      Admin: <code>admin@dphe.gov.bd</code> / পাসওয়ার্ড: <code>dphe2025</code>
+      <strong>🔑 Default Login (first-time use):</strong><br>
+      Admin: <code>admin@dphe.gov.bd</code> / Password: <code>dphe2025</code>
     </div>
   </div>
 
@@ -258,7 +255,7 @@ document.getElementById('yearNow').textContent = new Date().getFullYear();
 // can't handle custom OPTIONS/CORS headers on simple deployments).
 function apiCall(fn, args) {
   if (!API_URL || API_URL.indexOf('[') === 0) {
-    return Promise.reject(new Error('API_URL কনফিগার করা হয়নি। index.html ফাইলের উপরে সেট করুন।'));
+    return Promise.reject(new Error('API_URL is not configured. Set it at the top of index.html.'));
   }
   return fetch(API_URL, {
     method: 'POST',
@@ -290,10 +287,10 @@ function togglePassword() {
   var btn = document.getElementById('togglePassBtn');
   if (input.type === 'password') {
     input.type = 'text';
-    btn.textContent = 'লুকান';
+    btn.textContent = 'HIDE';
   } else {
     input.type = 'password';
-    btn.textContent = 'দেখুন';
+    btn.textContent = 'SHOW';
   }
 }
 
@@ -307,25 +304,25 @@ function handleLoginSubmit(e) {
 
   alertBox.innerHTML = '';
   btn.disabled = true;
-  btnText.innerHTML = '<span class="spinner"></span> যাচাই করা হচ্ছে...';
+  btnText.innerHTML = '<span class="spinner"></span> Signing in...';
 
   apiCall('doLogin', [email, password])
     .then(function(res) {
       if (res && res.success && res.token) {
         sessionStorage.setItem('dphe_auth_token', res.token);
         sessionStorage.setItem('dphe_user', JSON.stringify(res.user));
-        alertBox.innerHTML = '<div class="msg success">সফলভাবে লগইন হয়েছে! লোড হচ্ছে...</div>';
+        alertBox.innerHTML = '<div class="msg success">Login successful! Loading...</div>';
         window.location.href = 'app.html';
       } else {
         btn.disabled = false;
-        btnText.textContent = 'লগইন করুন (Login)';
-        alertBox.innerHTML = '<div class="msg error">লগইন ব্যর্থ হয়েছে। আবার চেষ্টা করুন।</div>';
+        btnText.textContent = 'Login';
+        alertBox.innerHTML = '<div class="msg error">Login failed. Please try again.</div>';
       }
     })
     .catch(function(err) {
       btn.disabled = false;
-      btnText.textContent = 'লগইন করুন (Login)';
-      var errMsg = err && err.message ? err.message : 'লগইন করতে সমস্যা হয়েছে।';
+      btnText.textContent = 'Login';
+      var errMsg = err && err.message ? err.message : 'Something went wrong while logging in.';
       alertBox.innerHTML = '<div class="msg error">' + esc(errMsg) + '</div>';
     });
 }
