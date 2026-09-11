@@ -16,9 +16,9 @@
 </script>
 
 <header class="topbar">
-  <div class="brand">
-    <img src="bd-logo.png" alt="Government of Bangladesh" class="topbar-logo" width="38" height="38">
-    <img src="dphe-logo.png" alt="DPHE" class="topbar-logo" width="29" height="38">
+  <div class="brand" style="display:flex;align-items:center;gap:14px;flex-wrap:nowrap;">
+    <img src="bd-logo.png" alt="Government of Bangladesh" class="topbar-logo" width="38" height="38" style="height:38px;width:38px;object-fit:contain;border-radius:8px;background:#fff;padding:3px;flex-shrink:0;">
+    <img src="dphe-logo.png" alt="DPHE" class="topbar-logo" width="29" height="38" style="height:38px;width:29px;object-fit:contain;border-radius:8px;background:#fff;padding:3px;flex-shrink:0;">
     <div>
       <h1>DPHE Water Sample Prediction System</h1>
       <div class="sub">Fiscal Year Sample &amp; Chemical Requirement Planning</div>
@@ -93,18 +93,30 @@ function apiCall(fnName, args) {
   if (!API_URL || API_URL.indexOf('[') === 0) {
     return Promise.reject(new Error('API_URL কনফিগার করা হয়নি। app.html ফাইলের উপরে সেট করুন।'));
   }
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function() { controller.abort(); }, 25000); // 25s safety timeout
+
   return fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ fn: fnName, args: args || [] })
+    body: JSON.stringify({ fn: fnName, args: args || [] }),
+    signal: controller.signal
   })
     .then(function(res) {
+      clearTimeout(timeoutId);
       if (!res.ok) throw new Error('Network error: ' + res.status + ' ' + res.statusText);
       return res.json();
     })
     .then(function(json) {
       if (!json.success) throw new Error(json.error || 'Unknown API error.');
       return json.data;
+    })
+    .catch(function(err) {
+      clearTimeout(timeoutId);
+      if (err && err.name === 'AbortError') {
+        throw new Error('সার্ভার থেকে সময়মতো উত্তর আসেনি (২৫ সেকেন্ড)। আবার চেষ্টা করুন।');
+      }
+      throw err;
     });
 }
 
@@ -126,9 +138,12 @@ function handleLogout() {
   var token = SESSION_TOKEN;
   sessionStorage.removeItem('dphe_auth_token');
   sessionStorage.removeItem('dphe_user');
-  apiCall('doLogout', [token])
-    .catch(function() { /* ignore — redirect regardless */ })
-    .then(function() { window.location.href = 'index.html'; });
+  // Tell the backend in the background, but don't make the user
+  // wait on the network for this — go straight to the login page.
+  try {
+    apiCall('doLogout', [token]).catch(function() { /* ignore */ });
+  } catch (e) { /* ignore */ }
+  window.location.href = 'index.html';
 }
 
 function openChangePasswordModal() {
