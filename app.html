@@ -635,31 +635,39 @@ async function renderChemistView() {
     </div>
     <div class="tabs">
       <button type="button" class="tab-btn active" data-tab="summary">Zone Summary</button>
-      <button type="button" class="tab-btn" data-tab="private">Private Sample Entry</button>
+      <button type="button" class="tab-btn" data-tab="private">Sample Entry</button>
     </div>
     <div class="tab-panel active" id="tab-summary"><div class="card" id="chemSummaryCard"><div class="loading">Loading...</div></div></div>
     <div class="tab-panel" id="tab-private">
       <div class="card">
-        <h2>Add Private Sample</h2>
+        <h2>Add Sample</h2>
         <div class="row">
-          <div class="col"><label>Client Type</label>
-            <select id="privClientType">
-              <option value="OTHER_GOVT">Other Government Institution</option>
-              <option value="PRIVATE_ORG">Private Organization</option>
-              <option value="WALK_IN">Walk-in Client</option>
+          <div class="col"><label>Client / Category Type</label>
+            <select id="privClientType" onchange="togglePrivOtherField()">
+              <option value="VVIP">👑 VVIP</option>
+              <option value="CALAMITY_DISASTER">🚨 Calamity / Disaster</option>
+              <option value="MONITORING_SURVEILLANCE">📡 Monitoring / Surveillance</option>
+              <option value="OTHER_GOVT">🏢 Other Government Institution</option>
+              <option value="PRIVATE_ORG">🏢 Private Organization</option>
+              <option value="WALK_IN">🚶 Walk-in Client</option>
+              <option value="OTHERS">🏷️ Others</option>
             </select>
           </div>
-          <div class="col"><label>Client Name</label><input type="text" id="privClientName" placeholder="Name of institution / client"></div>
+          <div class="col" id="privOtherSpecifyWrap" style="display:none">
+            <label>Specify Category <span style="color:#ef4444">*</span></label>
+            <input type="text" id="privOtherSpecify" placeholder="e.g. Research, Emergency, Special Project...">
+          </div>
+          <div class="col"><label>Client / Institution Name</label><input type="text" id="privClientName" placeholder="Name of institution / client / source"></div>
         </div>
         <h3>Parameters to test per sample</h3>
         ${paramCheckboxList(parameters, 'priv')}
-        <div class="row"><div class="col"><label>Expected Number of Samples</label><input type="number" id="privExpectedSamples" min="0"></div></div>
+        <div class="row"><div class="col"><label>Expected Number of Samples</label><input type="number" id="privExpectedSamples" min="0" placeholder="e.g. 100"></div></div>
         <label>Remarks (optional)</label><textarea id="privRemarks"></textarea>
-        <button type="button" id="privSubmitBtn">Save Private Sample</button>
+        <button type="button" id="privSubmitBtn">Save Sample</button>
       </div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <h2 style="margin:0">Private Sample Entries</h2>
+          <h2 style="margin:0">Sample Entries</h2>
           <button type="button" class="btn-sm" onclick="refreshChemistDashboard()" style="background:#f1f5f9;border:1px solid #cbd5e1;cursor:pointer;font-weight:600">🔄 Refresh Data</button>
         </div>
         <div id="privEntriesTable"><div class="loading">Loading...</div></div>
@@ -693,10 +701,68 @@ async function renderChemistView() {
   }
 }
 
+function extractOtherSpec(typeStr) {
+  if (!typeStr || !String(typeStr).startsWith('OTHERS')) return '';
+  const match = String(typeStr).match(/^OTHERS\s*\((.*)\)$/i);
+  if (match) return match[1].trim();
+  const match2 = String(typeStr).match(/^OTHERS\s*[-:]\s*(.*)$/i);
+  if (match2) return match2[1].trim();
+  return '';
+}
+
+function togglePrivOtherField() {
+  const sel = document.getElementById('privClientType');
+  const wrap = document.getElementById('privOtherSpecifyWrap');
+  if (!sel || !wrap) return;
+  const isOther = sel.value === 'OTHERS';
+  wrap.style.display = isOther ? '' : 'none';
+  if (isOther) {
+    const input = document.getElementById('privOtherSpecify');
+    if (input) input.focus();
+  }
+}
+
+function toggleEditPrivOtherField(entryId) {
+  const sel = document.getElementById('epe-type-' + entryId);
+  const wrap = document.getElementById('epe-other-wrap-' + entryId);
+  if (!sel || !wrap) return;
+  const isOther = sel.value === 'OTHERS';
+  wrap.style.display = isOther ? '' : 'none';
+  if (isOther) {
+    const input = document.getElementById('epe-other-' + entryId);
+    if (input) input.focus();
+  }
+}
+
+function toggleAdminEditPrivOtherField(entryId) {
+  const sel = document.getElementById('aep-type-' + entryId);
+  const wrap = document.getElementById('aep-other-wrap-' + entryId);
+  if (!sel || !wrap) return;
+  const isOther = sel.value === 'OTHERS';
+  wrap.style.display = isOther ? '' : 'none';
+  if (isOther) {
+    const input = document.getElementById('aep-other-' + entryId);
+    if (input) input.focus();
+  }
+}
+
 function clientBadge(type) {
-  const map = { OTHER_GOVT: ['other-govt', 'Other Govt.'], PRIVATE_ORG: ['private-org', 'Private Org.'], WALK_IN: ['walk-in', 'Walk-in'] };
-  const v = map[type] || ['govt', type];
-  return `<span class="badge ${v[0]}">${v[1]}</span>`;
+  const raw = String(type || '').trim();
+  if (raw === 'VVIP') return '<span class="badge" style="background:#fef3c7;color:#b45309;font-weight:700">👑 VVIP</span>';
+  if (raw === 'CALAMITY_DISASTER' || raw.toLowerCase().includes('calamity') || raw.toLowerCase().includes('disaster')) {
+    return '<span class="badge" style="background:#fee2e2;color:#b91c1c;font-weight:700">🚨 Calamity / Disaster</span>';
+  }
+  if (raw === 'MONITORING_SURVEILLANCE' || raw.toLowerCase().includes('surveillance') || raw.toLowerCase().includes('monitoring')) {
+    return '<span class="badge" style="background:#ccfbf1;color:#0f766e;font-weight:700">📡 Monitoring / Surveillance</span>';
+  }
+  if (raw === 'OTHER_GOVT') return '<span class="badge" style="background:#e0f2fe;color:#0369a1;font-weight:600">🏢 Other Govt.</span>';
+  if (raw === 'PRIVATE_ORG') return '<span class="badge" style="background:#ede9fe;color:#6d28d9;font-weight:600">🏢 Private Org.</span>';
+  if (raw === 'WALK_IN') return '<span class="badge" style="background:#f1f5f9;color:#475569;font-weight:600">🚶 Walk-in</span>';
+  if (raw.startsWith('OTHERS')) {
+    const desc = extractOtherSpec(raw);
+    return `<span class="badge" style="background:#f3f4f6;color:#374151;font-weight:600">🏷️ Others${desc ? ': ' + esc(desc) : ''}</span>`;
+  }
+  return `<span class="badge" style="background:#e2e8f0;color:#334155;font-weight:600">${esc(raw || 'Sample')}</span>`;
 }
 
 async function refreshChemistDashboard() {
@@ -716,14 +782,14 @@ async function refreshChemistDashboard() {
       <button type="button" class="secondary btn-sm" style="padding:8px 16px;font-size:13px" onclick="printChemicalReport()">🖨️ Chemical Report Print</button>
     </div>
     <div class="stat-grid">
-      <div class="stat-box"><div class="num">${data.grandTotalSamples}</div><div class="lbl">Total Samples (Govt + Private)</div></div>
+      <div class="stat-box"><div class="num">${data.grandTotalSamples}</div><div class="lbl">Total Samples (Govt + Zone Entries)</div></div>
       <div class="stat-box"><div class="num">${data.totalGovtSamples}</div><div class="lbl">Government / District Samples</div></div>
-      <div class="stat-box"><div class="num">${data.totalPrivateSamples}</div><div class="lbl">Private Samples</div></div>
+      <div class="stat-box"><div class="num">${data.totalPrivateSamples}</div><div class="lbl">Zone Sample Entries</div></div>
     </div>
     <h3>District-wise Breakdown</h3>
     <table><thead><tr><th>District</th><th>Expected Samples</th><th>Entries</th></tr></thead>
     <tbody>${data.districtBreakdown.map(d => `<tr><td>${esc(d.districtName)}</td><td>${d.totalSamples}</td><td>${d.entryCount}</td></tr>`).join('')}</tbody></table>
-    <h3>Private Sample Breakdown</h3>
+    <h3>Sample Breakdown by Category</h3>
     <table><thead><tr><th>Client Type</th><th>Expected Samples</th><th>Entries</th></tr></thead>
     <tbody>${data.privateBreakdownByType.map(p => `<tr><td>${clientBadge(p.clientType)}</td><td>${p.totalSamples}</td><td>${p.entryCount}</td></tr>`).join('')}</tbody></table>
     <h3 style="margin-top:20px">🧪 Predicted Chemical Requirement (Zone-wide)</h3>
@@ -739,7 +805,7 @@ async function refreshChemistDashboard() {
   // Update private entries table
   if (tableEl) {
     if (!data.privateEntries || data.privateEntries.length === 0) {
-      tableEl.innerHTML = `<div class="empty-state">No private sample entries yet.</div>`;
+      tableEl.innerHTML = `<div class="empty-state">No sample entries yet.</div>`;
     } else {
       tableEl.innerHTML = `
         <table>
@@ -848,16 +914,24 @@ function editPrivateEntry(entryId) {
   row.classList.add('editing');
   row.innerHTML = `
     <td colspan="8" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
-      <div style="font-weight:700;color:#92400e;margin-bottom:8px;font-size:14px">✏️ Edit & Resubmit Private Sample (Admin Note: ${esc(entry.sendBackReason || 'Revision needed')})</div>
+      <div style="font-weight:700;color:#92400e;margin-bottom:8px;font-size:14px">✏️ Edit & Resubmit Sample (Admin Note: ${esc(entry.sendBackReason || 'Revision needed')})</div>
       <div class="row">
-        <div class="col"><label>Client Type</label>
-          <select id="epe-type-${esc(entryId)}">
-            <option value="OTHER_GOVT" ${entry.clientType==='OTHER_GOVT'?'selected':''}>Other Government Institution</option>
-            <option value="PRIVATE_ORG" ${entry.clientType==='PRIVATE_ORG'?'selected':''}>Private Organization</option>
-            <option value="WALK_IN" ${entry.clientType==='WALK_IN'?'selected':''}>Walk-in Client</option>
+        <div class="col"><label>Category / Client Type</label>
+          <select id="epe-type-${esc(entryId)}" onchange="toggleEditPrivOtherField('${esc(entryId)}')">
+            <option value="VVIP" ${entry.clientType==='VVIP'?'selected':''}>👑 VVIP</option>
+            <option value="CALAMITY_DISASTER" ${entry.clientType==='CALAMITY_DISASTER'?'selected':''}>🚨 Calamity / Disaster</option>
+            <option value="MONITORING_SURVEILLANCE" ${entry.clientType==='MONITORING_SURVEILLANCE'?'selected':''}>📡 Monitoring / Surveillance</option>
+            <option value="OTHER_GOVT" ${entry.clientType==='OTHER_GOVT'?'selected':''}>🏢 Other Government Institution</option>
+            <option value="PRIVATE_ORG" ${entry.clientType==='PRIVATE_ORG'?'selected':''}>🏢 Private Organization</option>
+            <option value="WALK_IN" ${entry.clientType==='WALK_IN'?'selected':''}>🚶 Walk-in Client</option>
+            <option value="OTHERS" ${String(entry.clientType||'').startsWith('OTHERS')?'selected':''}>🏷️ Others</option>
           </select>
         </div>
-        <div class="col"><label>Client Name</label><input type="text" id="epe-name-${esc(entryId)}" value="${esc(entry.clientName)}"></div>
+        <div class="col" id="epe-other-wrap-${esc(entryId)}" style="${String(entry.clientType||'').startsWith('OTHERS') ? '' : 'display:none'}">
+          <label>Specify Category <span style="color:#ef4444">*</span></label>
+          <input type="text" id="epe-other-${esc(entryId)}" value="${esc(extractOtherSpec(entry.clientType))}" placeholder="Specify category">
+        </div>
+        <div class="col"><label>Client / Institution Name</label><input type="text" id="epe-name-${esc(entryId)}" value="${esc(entry.clientName)}"></div>
         <div class="col"><label>Expected Samples</label><input type="number" id="epe-samples-${esc(entryId)}" value="${esc(entry.expectedSamples)}" min="1"></div>
       </div>
       <label style="margin-top:6px;font-weight:600;display:block">Parameters to test:</label>
@@ -880,7 +954,19 @@ function editPrivateEntry(entryId) {
 }
 
 async function savePrivateEntry(entryId) {
-  const clientType = document.getElementById('epe-type-' + entryId).value;
+  const baseType = document.getElementById('epe-type-' + entryId).value;
+  let clientType = baseType;
+  if (baseType === 'OTHERS') {
+    const specEl = document.getElementById('epe-other-' + entryId);
+    const spec = specEl ? specEl.value.trim() : '';
+    if (!spec) {
+      alert('Please specify the category for Others.');
+      if (specEl) specEl.focus();
+      return;
+    }
+    clientType = 'OTHERS (' + spec + ')';
+  }
+
   const clientName = document.getElementById('epe-name-' + entryId).value.trim();
   const expectedSamples = document.getElementById('epe-samples-' + entryId).value;
   const remarks = document.getElementById('epe-remarks-' + entryId).value;
@@ -893,7 +979,7 @@ async function savePrivateEntry(entryId) {
   try {
     await gsr('updatePrivateSampleEntry', entryId, { clientType, clientName, expectedSamples, parameterIds: paramIds, remarks });
     await refreshChemistDashboard();
-    showMsg(document.getElementById('chemistView'), 'Private sample re-submitted successfully. It is now locked and re-included in chemical calculations.', 'success');
+    showMsg(document.getElementById('chemistView'), 'Sample re-submitted successfully. It is now locked and re-included in chemical calculations.', 'success');
   } catch(err) {
     alert(err.message);
   }
@@ -915,7 +1001,19 @@ async function deletePrivateEntry(entryId) {
 }
 
 async function privSubmitEntry() {
-  const clientType = document.getElementById('privClientType').value;
+  const baseType = document.getElementById('privClientType').value;
+  let clientType = baseType;
+  if (baseType === 'OTHERS') {
+    const otherInp = document.getElementById('privOtherSpecify');
+    const spec = otherInp ? otherInp.value.trim() : '';
+    if (!spec) {
+      alert('Please specify the category for Others.');
+      if (otherInp) otherInp.focus();
+      return;
+    }
+    clientType = 'OTHERS (' + spec + ')';
+  }
+
   const clientName = document.getElementById('privClientName').value.trim();
   const expectedSamples = document.getElementById('privExpectedSamples').value;
   const remarks = document.getElementById('privRemarks').value;
@@ -932,13 +1030,15 @@ async function privSubmitEntry() {
     document.getElementById('privClientName').value = '';
     document.getElementById('privExpectedSamples').value = '';
     document.getElementById('privRemarks').value = '';
+    if (document.getElementById('privOtherSpecify')) document.getElementById('privOtherSpecify').value = '';
+    togglePrivOtherField();
     document.querySelectorAll('input[data-group="priv"]').forEach(cb => cb.checked = false);
     await refreshChemistDashboard();
     showMsg(document.getElementById('chemistView'), 'Saved successfully.', 'success');
   } catch (err) {
     showMsg(document.getElementById('chemistView'), 'Error: ' + err.message, 'error');
   } finally {
-    btn.disabled = false; btn.textContent = 'Save Private Sample';
+    btn.disabled = false; btn.textContent = 'Save Sample';
   }
 }
 
@@ -1901,16 +2001,24 @@ function editAdminPrivateSubmission(entryId) {
   row.classList.add('editing');
   row.innerHTML = `
     <td colspan="9" style="background:#fffbeb;padding:16px;border:2px solid #f59e0b;border-radius:8px">
-      <div style="font-weight:700;color:#92400e;margin-bottom:10px;font-size:14px">✏️ Admin Edit: Private Sample Entry (${esc(entryId)})</div>
+      <div style="font-weight:700;color:#92400e;margin-bottom:10px;font-size:14px">✏️ Admin Edit: Zone Sample Entry (${esc(entryId)})</div>
       <div class="row">
-        <div class="col"><label>Client Type</label>
-          <select id="aep-type-${esc(entryId)}">
-            <option value="OTHER_GOVT" ${entry.ClientType==='OTHER_GOVT'?'selected':''}>Other Government Institution</option>
-            <option value="PRIVATE_ORG" ${entry.ClientType==='PRIVATE_ORG'?'selected':''}>Private Organization</option>
-            <option value="WALK_IN" ${entry.ClientType==='WALK_IN'?'selected':''}>Walk-in Client</option>
+        <div class="col"><label>Category / Client Type</label>
+          <select id="aep-type-${esc(entryId)}" onchange="toggleAdminEditPrivOtherField('${esc(entryId)}')">
+            <option value="VVIP" ${entry.ClientType==='VVIP'?'selected':''}>👑 VVIP</option>
+            <option value="CALAMITY_DISASTER" ${entry.ClientType==='CALAMITY_DISASTER'?'selected':''}>🚨 Calamity / Disaster</option>
+            <option value="MONITORING_SURVEILLANCE" ${entry.ClientType==='MONITORING_SURVEILLANCE'?'selected':''}>📡 Monitoring / Surveillance</option>
+            <option value="OTHER_GOVT" ${entry.ClientType==='OTHER_GOVT'?'selected':''}>🏢 Other Government Institution</option>
+            <option value="PRIVATE_ORG" ${entry.ClientType==='PRIVATE_ORG'?'selected':''}>🏢 Private Organization</option>
+            <option value="WALK_IN" ${entry.ClientType==='WALK_IN'?'selected':''}>🚶 Walk-in Client</option>
+            <option value="OTHERS" ${String(entry.ClientType||'').startsWith('OTHERS')?'selected':''}>🏷️ Others</option>
           </select>
         </div>
-        <div class="col"><label>Client Name</label><input type="text" id="aep-name-${esc(entryId)}" value="${esc(entry.ClientName)}"></div>
+        <div class="col" id="aep-other-wrap-${esc(entryId)}" style="${String(entry.ClientType||'').startsWith('OTHERS') ? '' : 'display:none'}">
+          <label>Specify Category <span style="color:#ef4444">*</span></label>
+          <input type="text" id="aep-other-${esc(entryId)}" value="${esc(extractOtherSpec(entry.ClientType))}" placeholder="Specify category">
+        </div>
+        <div class="col"><label>Client / Institution Name</label><input type="text" id="aep-name-${esc(entryId)}" value="${esc(entry.ClientName)}"></div>
         <div class="col"><label>Expected Samples</label><input type="number" id="aep-samples-${esc(entryId)}" value="${esc(entry.ExpectedSamples)}" min="1"></div>
         <div class="col"><label>Remarks</label><input type="text" id="aep-remarks-${esc(entryId)}" value="${esc(entry.Remarks || '')}"></div>
       </div>
@@ -1931,7 +2039,19 @@ function editAdminPrivateSubmission(entryId) {
 }
 
 async function saveAdminPrivateSubmission(entryId) {
-  const clientType = document.getElementById('aep-type-' + entryId).value;
+  const baseType = document.getElementById('aep-type-' + entryId).value;
+  let clientType = baseType;
+  if (baseType === 'OTHERS') {
+    const specEl = document.getElementById('aep-other-' + entryId);
+    const spec = specEl ? specEl.value.trim() : '';
+    if (!spec) {
+      alert('Please specify the category for Others.');
+      if (specEl) specEl.focus();
+      return;
+    }
+    clientType = 'OTHERS (' + spec + ')';
+  }
+
   const clientName = document.getElementById('aep-name-' + entryId).value.trim();
   const expectedSamples = document.getElementById('aep-samples-' + entryId).value;
   const remarks = document.getElementById('aep-remarks-' + entryId).value;
