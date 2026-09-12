@@ -338,6 +338,15 @@ window.addEventListener('DOMContentLoaded', function() {
   try {
     fetch(API_URL, { method: 'GET', mode: 'no-cors', cache: 'no-store' }).catch(function() {});
   } catch (e) {}
+
+  // If the user was just auto-logged-out for inactivity, or the
+  // previous session simply expired, tell them why instead of
+  // silently dropping them back on the login screen.
+  var reason = new URLSearchParams(window.location.search).get('reason');
+  var alertBox = document.getElementById('loginAlert');
+  if (reason === 'idle' && alertBox) {
+    alertBox.innerHTML = '<div class="msg" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:10px 12px;border-radius:8px;font-size:13px;">You were signed out after a period of inactivity. Please log in again.</div>';
+  }
 });
 
 function togglePassword() {
@@ -364,8 +373,16 @@ function handleLoginSubmit(e) {
   btn.disabled = true;
   btnText.innerHTML = '<span class="spinner"></span> Signing in...';
 
+  // If it's taking a while, it's almost always a one-time server
+  // cold start (a few seconds) — say so instead of leaving the user
+  // guessing whether the app has frozen.
+  var slowHintTimer = setTimeout(function() {
+    btnText.innerHTML = '<span class="spinner"></span> Still working — server is starting up, this can take up to 30s...';
+  }, 4000);
+
   apiCall('doLogin', [email, password])
     .then(function(res) {
+      clearTimeout(slowHintTimer);
       if (res && res.success && res.token) {
         sessionStorage.setItem('dphe_auth_token', res.token);
         sessionStorage.setItem('dphe_user', JSON.stringify(res.user));
@@ -378,6 +395,7 @@ function handleLoginSubmit(e) {
       }
     })
     .catch(function(err) {
+      clearTimeout(slowHintTimer);
       btn.disabled = false;
       btnText.textContent = 'Login';
       var errMsg = err && err.message ? err.message : 'Something went wrong while logging in.';

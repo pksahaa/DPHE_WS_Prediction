@@ -63,6 +63,18 @@
   </div>
 </div>
 
+<!-- Idle Auto-Logout Warning Modal -->
+<div class="modal-backdrop" id="idleWarningModal">
+  <div class="modal-box">
+    <h3 style="margin-top:0;color:var(--primary-dark)">⏳ Still there?</h3>
+    <p>You've been inactive for a while. For security, you'll be logged out in <strong><span id="idleCountdownText">60</span> seconds</strong>.</p>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button type="button" class="btn-cancel" onclick="handleLogout('idle')">Log Out Now</button>
+      <button type="button" class="btn-save" onclick="stayLoggedIn()">Stay Signed In</button>
+    </div>
+  </div>
+</div>
+
 <footer>DPHE Water Sample Prediction System — Department of Public Health Engineering (DPHE)</footer>
 
 <script>
@@ -222,7 +234,7 @@ function gsr(fnName, ...args) {
   });
 }
 
-function handleLogout() {
+function handleLogout(reason) {
   var token = SESSION_TOKEN;
   sessionStorage.removeItem('dphe_auth_token');
   sessionStorage.removeItem('dphe_user');
@@ -231,8 +243,67 @@ function handleLogout() {
   try {
     apiCall('doLogout', [token]).catch(function() { /* ignore */ });
   } catch (e) { /* ignore */ }
-  window.location.href = 'index.html';
+  window.location.href = reason ? ('index.html?reason=' + encodeURIComponent(reason)) : 'index.html';
 }
+
+// =============================================================
+// Idle auto-logout
+// -------------------------------------------------------------
+// If the user leaves the tab open without touching it, we log them
+// out automatically instead of leaving an authenticated session
+// sitting open on a shared/field computer. A warning modal gives
+// them a chance to stay signed in before it actually happens.
+// =============================================================
+var IDLE_TIMEOUT_MINUTES = 20;   // total inactivity allowed before logout
+var IDLE_WARNING_SECONDS = 60;   // how long the warning countdown lasts
+
+var _idleMainTimer = null;
+var _idleCountdownTimer = null;
+var _idleSecondsLeft = IDLE_WARNING_SECONDS;
+
+function resetIdleTimer() {
+  if (document.getElementById('idleWarningModal').classList.contains('show')) return; // don't reset while warning is up — only the explicit button should
+  clearTimeout(_idleMainTimer);
+  _idleMainTimer = setTimeout(showIdleWarning, (IDLE_TIMEOUT_MINUTES * 60 - IDLE_WARNING_SECONDS) * 1000);
+}
+
+function showIdleWarning() {
+  _idleSecondsLeft = IDLE_WARNING_SECONDS;
+  var modal = document.getElementById('idleWarningModal');
+  var countEl = document.getElementById('idleCountdownText');
+  countEl.textContent = _idleSecondsLeft;
+  modal.classList.add('show');
+  _idleCountdownTimer = setInterval(function() {
+    _idleSecondsLeft--;
+    countEl.textContent = _idleSecondsLeft;
+    if (_idleSecondsLeft <= 0) {
+      clearInterval(_idleCountdownTimer);
+      handleLogout('idle');
+    }
+  }, 1000);
+}
+
+function stayLoggedIn() {
+  clearInterval(_idleCountdownTimer);
+  document.getElementById('idleWarningModal').classList.remove('show');
+  resetIdleTimer();
+}
+
+(function initIdleTracking() {
+  var activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+  var lastReset = 0;
+  activityEvents.forEach(function(evt) {
+    document.addEventListener(evt, function() {
+      // Throttle: activity fires constantly (mousemove/scroll) — no
+      // need to touch the timer more than once every few seconds.
+      var now = Date.now();
+      if (now - lastReset < 3000) return;
+      lastReset = now;
+      resetIdleTimer();
+    }, { passive: true });
+  });
+  resetIdleTimer();
+})();
 
 function openChangePasswordModal() {
   document.getElementById('pwdModalAlert').innerHTML = '';
